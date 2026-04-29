@@ -1,0 +1,63 @@
+{% extends "tracker/base.html" %}
+
+{% block title %}Portal Jobs | Job Tracker{% endblock %}
+
+{% block content %}
+    <section class="rounded-[2rem] border border-white/70 bg-white/85 p-6 shadow-sm backdrop-blur">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+                <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600">Portal Fetch</p>
+                <h2 class="mt-2 text-3xl font-bold tracking-tight">{{ portal_record.label }}</h2>
+                <p class="mt-3 break-all text-sm text-slate-600">{{ portal_record.values.url }}</p>
+            </div>
+        </div>
+        <form action="{% url 'fetch_portal_jobs' portal_record.row_key %}" method="post" class="mt-6 grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
+            {% csrf_token %}
+            <div>
+                <label class="text-sm font-semibold text-slate-800" for="id_keywords">Filter keywords</label>
+                <textarea id="id_keywords" name="keywords" rows="4" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white/85 px-4 py-3 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-200">{{ current_keywords }}</textarea>
+                <p class="mt-2 text-sm text-slate-500">By default, the scraper uses keywords like PhD, Candidate, Wissenschaft, Research, Engineer, ML, AI, Data, and more.</p>
+            </div>
+            <div class="flex flex-wrap gap-3">
+                <button class="rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800" type="submit">Fetch latest jobs</button>
+                <button form="fetch-all-portals-form" class="rounded-full bg-sky-100 px-4 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-200" type="submit">Fetch all portals</button>
+                <a href="{{ all_portal_jobs_url }}" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50">All fetched jobs</a>
+                <a href="{% url 'portals_list' %}" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50">Back to portals</a>
+            </div>
+        </form>
+        <form id="fetch-all-portals-form" action="{{ fetch_all_portal_jobs_url }}" method="post" class="hidden" data-confirm-message="Fetch jobs from all saved portals now?">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ all_portal_jobs_url }}">
+        </form>
+    </section>
+
+    <section class="mt-8 space-y-4">
+        {% for job in jobs %}
+            <article class="rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-sm backdrop-blur">
+                <div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                    <div class="flex-1">
+                        <a href="{{ job.url }}" target="_blank" rel="noreferrer" class="text-lg font-semibold text-sky-700 hover:text-sky-800">{{ job.title }}</a>
+                        <p class="mt-3 break-all text-sm text-slate-500">{{ job.url }}</p>
+                        {% if job.summary %}
+                            <p class="mt-4 text-sm leading-6 text-slate-600">{{ job.summary }}</p>
+                        {% endif %}
+                    </div>
+                    <div class="flex flex-wrap gap-3">
+                        {% if job.added_to_apply %}
+                            <span class="rounded-full bg-emerald-100 px-4 py-2 text-sm font-medium text-emerald-700 ring-1 ring-emerald-200">Already in To Apply</span>
+                        {% else %}
+                            <form action="{% url 'add_portal_job_to_apply' job.id %}" method="post">
+                                {% csrf_token %}
+                                <button class="rounded-full bg-sky-100 px-4 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-200" type="submit">Add to To Apply</button>
+                            </form>
+                        {% endif %}
+                    </div>
+                </div>
+            </article>
+        {% empty %}
+            <article class="rounded-[2rem] border border-dashed border-slate-300 bg-white/70 p-10 text-center text-sm text-slate-600 shadow-sm backdrop-blur">
+                Fetch this portal to populate potential jobs here.
+            </article>
+        {% endfor %}
+    </section>
+{% endblock %}

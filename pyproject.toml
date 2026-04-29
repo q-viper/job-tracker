@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "job-tracker-app"
+version = "0.1.0"
+description = "Django job tracker with dynamic tables, portal scraping, notifications, dashboards, and RAG."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+    { name = "Viper" },
+]
+dynamic = ["dependencies"]
+
+[project.scripts]
+job-tracker = "run:main"
+
+[tool.setuptools]
+include-package-data = true
+py-modules = ["run"]
+
+[tool.setuptools.packages.find]
+include = ["config", "tracker", "tracker.*"]
+
+[tool.setuptools.package-data]
+tracker = ["templates/**/*.html"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }

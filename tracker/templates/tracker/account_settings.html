@@ -1,0 +1,53 @@
+{% extends "tracker/base.html" %}
+
+{% block title %}Settings | Job Tracker{% endblock %}
+
+{% block content %}
+    <section class="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+        <article class="rounded-[2rem] border border-white/70 bg-white/85 p-6 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85">
+            <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Notifications</p>
+            <h2 class="mt-2 text-3xl font-bold tracking-tight">Email, automation, and chat retention</h2>
+            <p class="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                Configure reminders, portal auto-fetch behavior, and how long Quassi chat history should remain in the app.
+            </p>
+
+            <div class="mt-6 rounded-3xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-700 dark:bg-slate-950/60">
+                <p class="font-mono text-xs uppercase tracking-[0.25em] text-slate-500 dark:text-slate-400">SMTP status</p>
+                {% if smtp_configured %}
+                    <p class="mt-3 text-sm leading-6 text-emerald-700 dark:text-emerald-300">SMTP is configured. Email notifications can be delivered when reminders run.</p>
+                {% else %}
+                    <p class="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">SMTP is not configured. The app still runs normally, but email delivery features stay inactive until SMTP values are added.</p>
+                {% endif %}
+            </div>
+        </article>
+
+        <article class="rounded-[2rem] border border-white/70 bg-white/85 p-6 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85">
+            <form method="post" class="space-y-5">
+                {% csrf_token %}
+                {% for field in form %}
+                    <div>
+                        <label class="text-sm font-semibold text-slate-800 dark:text-slate-100" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                        <div>{{ field }}</div>
+                        {% if field.help_text %}
+                            <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">{{ field.help_text }}</p>
+                        {% endif %}
+                        {% if field.errors %}
+                            <p class="mt-2 text-sm text-rose-600">{{ field.errors|join:", " }}</p>
+                        {% endif %}
+                    </div>
+                {% endfor %}
+                <div class="flex flex-wrap gap-3">
+                    <button class="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400" type="submit">Save settings</button>
+                    <button class="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700" type="submit" name="preview_notification" value="1">Check notification preview</button>
+                </div>
+            </form>
+
+            {% if notification_preview %}
+                <div class="mt-6 rounded-3xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-700 dark:bg-slate-950/60">
+                    <p class="font-mono text-xs uppercase tracking-[0.25em] text-slate-500 dark:text-slate-400">Notification preview</p>
+                    <pre class="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-slate-700 dark:text-slate-200">{{ notification_preview }}</pre>
+                </div>
+            {% endif %}
+        </article>
+    </section>
+{% endblock %}

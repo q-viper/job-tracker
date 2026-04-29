@@ -1,0 +1,425 @@
+{% load tracker_extras %}
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Job Tracker{% endblock %}</title>
+    <script>
+        const savedTheme = localStorage.getItem("job-tracker-theme");
+        if (savedTheme === "dark") {
+            document.documentElement.classList.add("dark");
+        }
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ["Space Grotesk", "ui-sans-serif", "system-ui"],
+                        mono: ["IBM Plex Mono", "ui-monospace", "monospace"],
+                    },
+                    boxShadow: {
+                        glow: "0 22px 60px rgba(14, 165, 233, 0.18)",
+                    },
+                },
+            },
+        };
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body class="min-h-screen bg-slate-100 text-slate-900 transition-colors dark:bg-slate-950 dark:text-slate-100">
+    {{ quassi_history|json_script:"quassi-history-data" }}
+    {{ rag_default_prompts|json_script:"quassi-prompts-data" }}
+    {{ quassi_models|json_script:"quassi-models-data" }}
+
+    <div class="mx-auto w-full max-w-none px-3 py-4 sm:px-5 xl:px-8 2xl:px-10">
+        <header class="sticky top-3 z-40 mb-8 overflow-hidden rounded-[2rem] border border-slate-200 bg-white/95 p-6 shadow-sm backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/95">
+            <div class="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                    <p class="font-mono text-xs uppercase tracking-[0.3em] text-sky-600 dark:text-sky-300">Job Search Workspace</p>
+                    <h1 class="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Track momentum, not just status.</h1>
+                    <p class="mt-3 max-w-3xl text-sm text-slate-600 dark:text-slate-300">
+                        Track applications, scrape portals, build custom tables, shape your dashboard, and ask Quassi for focused help.
+                    </p>
+                </div>
+                <div class="rounded-3xl border border-slate-200/80 bg-slate-950 px-5 py-4 text-white shadow-xl dark:border-slate-700 dark:bg-slate-950/90">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <p class="font-mono text-xs uppercase tracking-[0.28em] text-slate-400">Signed in</p>
+                            <p class="mt-2 text-lg font-semibold">{{ request.user.username }}</p>
+                        </div>
+                        <button id="theme-toggle" type="button" class="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/10 transition hover:bg-white/20" aria-label="Toggle theme">
+                            <span id="theme-toggle-icon" aria-hidden="true"></span>
+                        </button>
+                    </div>
+                    <div class="mt-4 flex flex-wrap gap-3 text-sm">
+                        <a class="rounded-full bg-white/10 px-4 py-2 transition hover:bg-white/20" href="{% url 'manage_tables' %}">Manage Tables</a>
+                        <a class="rounded-full bg-white/10 px-4 py-2 transition hover:bg-white/20" href="{% url 'account_settings' %}">Settings</a>
+                        {% if request.user.is_staff %}
+                            <a class="rounded-full bg-white/10 px-4 py-2 transition hover:bg-white/20" href="/admin/">Django Admin</a>
+                        {% endif %}
+                        <form action="{% url 'logout' %}" method="post">
+                            {% csrf_token %}
+                            <button class="rounded-full bg-rose-500/90 px-4 py-2 transition hover:bg-rose-500" type="submit">Logout</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <nav class="mt-6 flex gap-3 overflow-x-auto pb-1">
+                <a href="{% url 'dashboard' %}" class="rounded-full px-4 py-2 text-sm font-medium transition {% if nav_section == 'dashboard' %}bg-slate-950 text-white dark:bg-sky-500 dark:text-slate-950{% else %}bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700{% endif %}">Dashboard</a>
+                {% for table in navigation_tables %}
+                    {% if table.slug == 'to-apply' %}
+                        {% url 'to_apply_list' as item_url %}
+                    {% elif table.slug == 'applied' %}
+                        {% url 'applied_list' as item_url %}
+                    {% elif table.slug == 'portals' %}
+                        {% url 'portals_list' as item_url %}
+                    {% else %}
+                        {% url 'workspace_table' table.slug as item_url %}
+                    {% endif %}
+                    <a href="{{ item_url }}" class="rounded-full px-4 py-2 text-sm font-medium transition {% if nav_section == table.slug %}bg-slate-950 text-white dark:bg-sky-500 dark:text-slate-950{% else %}bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700{% endif %}">
+                        {{ table.name }}
+                    </a>
+                {% endfor %}
+                <a href="{% url 'account_settings' %}" class="rounded-full px-4 py-2 text-sm font-medium transition {% if nav_section == 'settings' %}bg-slate-950 text-white dark:bg-sky-500 dark:text-slate-950{% else %}bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700{% endif %}">Settings</a>
+                <a href="{% url 'manage_tables' %}" class="rounded-full px-4 py-2 text-sm font-medium transition {% if nav_section == 'tables' %}bg-slate-950 text-white dark:bg-sky-500 dark:text-slate-950{% else %}bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700{% endif %}">Schema Panel</a>
+            </nav>
+        </header>
+
+        {% if messages %}
+            <div class="mb-6 space-y-3">
+                {% for message in messages %}
+                    <div class="rounded-2xl border border-white/70 bg-white/80 px-4 py-3 text-sm shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/80 dark:text-slate-100">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+    </div>
+
+    {% if request.user.is_authenticated %}
+        <div class="fixed bottom-4 right-4 z-50 w-[calc(100vw-1.5rem)] max-w-xl">
+            <div id="quassi-shell" class="overflow-hidden rounded-[1.8rem] border border-white/80 bg-white/92 shadow-2xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/92">
+                <button id="quassi-toggle" type="button" class="flex w-full items-center justify-between gap-4 bg-slate-950 px-5 py-4 text-left text-white dark:bg-sky-500 dark:text-slate-950">
+                    <span>
+                        <span class="block text-sm font-semibold">Quassi</span>
+                        <span class="mt-1 block text-xs text-slate-300 dark:text-slate-950/80">Ask about jobs, upload a CV, or add matches into To Apply.</span>
+                    </span>
+                    <span id="quassi-toggle-icon" class="text-lg font-semibold">+</span>
+                </button>
+                <div id="quassi-panel" class="hidden h-[min(78vh,46rem)] min-h-0 flex-col overflow-hidden">
+                    <form id="quassi-csrf-form" class="hidden">{% csrf_token %}</form>
+                    <div class="border-b border-slate-200/80 px-4 py-4 dark:border-slate-700">
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Quick Templates</p>
+                        <div class="mt-3 overflow-x-auto pb-2">
+                            <div class="flex min-w-max gap-2">
+                                {% for prompt in rag_default_prompts %}
+                                    <button type="button" class="quassi-prompt whitespace-nowrap rounded-full bg-slate-100 px-3 py-2 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-100" data-prompt="{{ prompt }}">{{ prompt }}</button>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                    <div id="quassi-messages" class="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-4 text-sm"></div>
+                    <div class="border-t border-slate-200/80 p-4 dark:border-slate-700">
+                        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+                            <div class="flex flex-wrap items-center gap-3">
+                                <label for="quassi-model" class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Model</label>
+                                <select id="quassi-model" class="rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+                                    {% for model in quassi_models %}
+                                        <option value="{{ model.slug }}" {% if model.is_default %}selected{% endif %}>{{ model.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <button id="quassi-clear" type="button" data-confirm-message="Clear this chat history? This will permanently remove your saved conversation." class="rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700">Clear chat</button>
+                        </div>
+                        <div class="mb-3 flex flex-wrap items-center gap-3">
+                            <label for="quassi-document" class="cursor-pointer rounded-full bg-slate-100 px-4 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700">Attach CV or document</label>
+                            <input id="quassi-document" type="file" class="hidden" accept=".txt,.md,.pdf,.docx,.csv">
+                            <span id="quassi-document-name" class="text-xs text-slate-500 dark:text-slate-400">No file selected</span>
+                        </div>
+                        <div class="flex flex-col gap-3 sm:flex-row">
+                            <textarea id="quassi-input" rows="3" class="w-full rounded-2xl border border-slate-300/80 bg-white/85 px-4 py-3 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:border-sky-400 dark:focus:ring-sky-900" placeholder="Ask about PhD roles, deadlines, interview stages, or match an uploaded CV to jobs..."></textarea>
+                            <button id="quassi-send" type="button" class="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400">Send</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            const themeToggle = document.getElementById("theme-toggle");
+            const themeToggleIcon = document.getElementById("theme-toggle-icon");
+            function syncThemeIcon() {
+                if (!themeToggleIcon) {
+                    return;
+                }
+                const isDark = document.documentElement.classList.contains("dark");
+                themeToggleIcon.innerHTML = isDark
+                    ? '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79Z" /></svg>'
+                    : '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25M12 18.75V21m9-9h-2.25M5.25 12H3m15.364 6.364-1.591-1.591M7.227 7.227 5.636 5.636m12.728 0-1.591 1.591M7.227 16.773l-1.591 1.591M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" /></svg>';
+            }
+            if (themeToggle) {
+                syncThemeIcon();
+                themeToggle.addEventListener("click", () => {
+                    document.documentElement.classList.toggle("dark");
+                    localStorage.setItem(
+                        "job-tracker-theme",
+                        document.documentElement.classList.contains("dark") ? "dark" : "light"
+                    );
+                    syncThemeIcon();
+                });
+            }
+
+            const quassiToggle = document.getElementById("quassi-toggle");
+            const quassiPanel = document.getElementById("quassi-panel");
+            const quassiToggleIcon = document.getElementById("quassi-toggle-icon");
+            const quassiMessages = document.getElementById("quassi-messages");
+            const quassiInput = document.getElementById("quassi-input");
+            const quassiSend = document.getElementById("quassi-send");
+            const quassiModelSelect = document.getElementById("quassi-model");
+            const quassiDocumentInput = document.getElementById("quassi-document");
+            const quassiDocumentName = document.getElementById("quassi-document-name");
+            const quassiPromptButtons = document.querySelectorAll(".quassi-prompt");
+            const quassiClear = document.getElementById("quassi-clear");
+            let quassiHistory = JSON.parse(document.getElementById("quassi-history-data").textContent);
+            const quassiModels = JSON.parse(document.getElementById("quassi-models-data").textContent);
+
+            function getCsrfToken() {
+                return document.querySelector("#quassi-csrf-form input[name=csrfmiddlewaretoken]").value;
+            }
+
+            function confirmDestructiveAction(target) {
+                const message = target && target.dataset ? target.dataset.confirmMessage : "";
+                return !message || window.confirm(message);
+            }
+
+            document.addEventListener("submit", (event) => {
+                const form = event.target.closest("form[data-confirm-message]");
+                if (form && !confirmDestructiveAction(form)) {
+                    event.preventDefault();
+                }
+            });
+
+            function scrollQuassiToBottom() {
+                quassiMessages.scrollTop = quassiMessages.scrollHeight;
+            }
+
+            function escapeHtml(value) {
+                return String(value)
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#39;");
+            }
+
+            function buildSourceCard(source) {
+                const safeTitle = escapeHtml(source.title || "Untitled");
+                const safeLabel = escapeHtml(source.source_label || "Source");
+                const safePreview = escapeHtml(source.preview || "");
+                const safeUrl = source.url ? escapeHtml(source.url) : "";
+                const safeType = escapeHtml(source.application_type || "");
+                const link = safeUrl
+                    ? `<a class="break-all text-sky-700 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200" href="${safeUrl}" target="_blank" rel="noreferrer">${safeTitle}</a>`
+                    : `<span>${safeTitle}</span>`;
+                const addButton = source.can_add_to_apply && !source.added_to_apply
+                    ? `<button type="button" class="quassi-add-to-apply mt-2 rounded-full bg-sky-100 px-3 py-2 text-[11px] font-semibold text-sky-800 transition hover:bg-sky-200 dark:bg-sky-500/20 dark:text-sky-200" data-job-id="${source.portal_job_id || ""}" data-title="${safeTitle}" data-url="${safeUrl}" data-application-type="${safeType}">Add to To Apply</button>`
+                    : source.portal_job_id
+                        ? `<span class="mt-2 inline-flex rounded-full bg-emerald-100 px-3 py-2 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-200">Already in To Apply</span>`
+                        : "";
+                return `<div class="mt-3 rounded-xl bg-white px-3 py-2 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300"><div class="font-semibold text-slate-800 dark:text-slate-100">${safeLabel}</div>${link}<div class="mt-1 break-words">${safePreview}</div>${addButton}</div>`;
+            }
+
+            function appendMessage(message) {
+                const wrapper = document.createElement("div");
+                wrapper.className = message.role === "user"
+                    ? "ml-8 rounded-2xl bg-slate-950 px-4 py-3 text-white dark:bg-sky-500 dark:text-slate-950"
+                    : "mr-8 rounded-2xl bg-slate-100 px-4 py-3 text-slate-700 dark:bg-slate-800 dark:text-slate-100";
+                const attachmentHtml = message.attachment_name
+                    ? `<div class="mt-2 text-[11px] font-medium ${message.role === "user" ? "text-white/80 dark:text-slate-950/80" : "text-slate-500 dark:text-slate-400"}">Attached: ${escapeHtml(message.attachment_name)}</div>`
+                    : "";
+                const sourcesHtml = (message.sources || []).map(buildSourceCard).join("");
+                wrapper.innerHTML = `<div class="whitespace-pre-wrap break-words">${escapeHtml(message.text)}</div>${attachmentHtml}${sourcesHtml ? `<div class="mt-3">${sourcesHtml}</div>` : ""}`;
+                quassiMessages.appendChild(wrapper);
+                scrollQuassiToBottom();
+            }
+
+            function renderHistory() {
+                quassiMessages.innerHTML = "";
+                if (!quassiHistory.length) {
+                    appendMessage({
+                        role: "assistant",
+                        text: "Ask about your imported applications, fetched portal jobs, deadlines, or upload a CV and I will match it against the jobs I can see.",
+                        sources: [],
+                    });
+                    return;
+                }
+                quassiHistory.forEach((item) => {
+                    appendMessage({
+                        role: item.role,
+                        text: item.content,
+                        attachment_name: item.attachment_name,
+                        sources: item.metadata && item.metadata.sources ? item.metadata.sources : [],
+                    });
+                });
+                scrollQuassiToBottom();
+            }
+
+            async function clearQuassiHistory() {
+                if (!quassiClear) {
+                    return;
+                }
+                if (!confirmDestructiveAction(quassiClear)) {
+                    return;
+                }
+                quassiClear.disabled = true;
+                try {
+                    const response = await fetch("{% url 'api_chat_clear' %}", {
+                        method: "POST",
+                        headers: {
+                            "X-CSRFToken": getCsrfToken(),
+                        },
+                    });
+                    if (!response.ok) {
+                        throw new Error("Could not clear the chat history.");
+                    }
+                    quassiHistory = [];
+                    renderHistory();
+                } catch (error) {
+                    quassiClear.disabled = false;
+                    return;
+                }
+                quassiClear.disabled = false;
+            }
+
+            async function addPortalJobToApply(button) {
+                button.disabled = true;
+                try {
+                    const response = await fetch("{% url 'api_chat_add_to_apply' %}", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-CSRFToken": getCsrfToken(),
+                        },
+                        body: JSON.stringify({
+                            portal_job_id: button.dataset.jobId || "",
+                            title: button.dataset.title || "",
+                            url: button.dataset.url || "",
+                            application_type: button.dataset.applicationType || "",
+                        }),
+                    });
+                    if (response.ok) {
+                        button.outerHTML = `<span class="mt-2 inline-flex rounded-full bg-emerald-100 px-3 py-2 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-200">Added to To Apply</span>`;
+                    } else {
+                        button.disabled = false;
+                    }
+                } catch (error) {
+                    button.disabled = false;
+                }
+            }
+
+            quassiMessages.addEventListener("click", (event) => {
+                const button = event.target.closest(".quassi-add-to-apply");
+                if (!button) {
+                    return;
+                }
+                addPortalJobToApply(button);
+            });
+
+            async function sendQuassiQuery(query) {
+                if (!query.trim()) {
+                    return;
+                }
+                const activeFile = quassiDocumentInput.files[0];
+                appendMessage({
+                    role: "user",
+                    text: query,
+                    attachment_name: activeFile ? activeFile.name : "",
+                    sources: [],
+                });
+                quassiInput.value = "";
+                appendMessage({ role: "assistant", text: "Thinking...", sources: [] });
+                const placeholder = quassiMessages.lastElementChild;
+
+                try {
+                    const formData = new FormData();
+                    formData.append("query", query);
+                    if (quassiModelSelect && quassiModelSelect.value) {
+                        formData.append("model_slug", quassiModelSelect.value);
+                    }
+                    if (activeFile) {
+                        formData.append("document", activeFile);
+                    }
+                    const response = await fetch("{% url 'api_rag_chat' %}", {
+                        method: "POST",
+                        headers: {
+                            "X-CSRFToken": getCsrfToken(),
+                        },
+                        body: formData,
+                    });
+                    const payload = await response.json();
+                    placeholder.remove();
+
+                    if (!response.ok) {
+                        appendMessage({ role: "assistant", text: payload.detail || "Quassi could not complete that request right now.", sources: [] });
+                        return;
+                    }
+
+                    const text = payload.refreshed_portals
+                        ? `${payload.answer}\n\nRefreshed portals: ${payload.refreshed_portals}`
+                        : payload.answer;
+                    appendMessage({
+                        role: "assistant",
+                        text: text || "No answer returned.",
+                        sources: payload.sources || [],
+                    });
+                    quassiDocumentInput.value = "";
+                    quassiDocumentName.textContent = "No file selected";
+                } catch (error) {
+                    placeholder.remove();
+                    appendMessage({ role: "assistant", text: "Quassi could not complete that request right now.", sources: [] });
+                }
+            }
+
+            quassiToggle.addEventListener("click", () => {
+                quassiPanel.classList.toggle("hidden");
+                quassiPanel.classList.toggle("flex");
+                quassiToggleIcon.textContent = quassiPanel.classList.contains("hidden") ? "+" : "-";
+                if (!quassiPanel.classList.contains("hidden")) {
+                    scrollQuassiToBottom();
+                }
+            });
+
+            quassiSend.addEventListener("click", () => sendQuassiQuery(quassiInput.value));
+            quassiInput.addEventListener("keydown", (event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    sendQuassiQuery(quassiInput.value);
+                }
+            });
+
+            quassiPromptButtons.forEach((button) => {
+                button.addEventListener("click", () => sendQuassiQuery(button.dataset.prompt || ""));
+            });
+
+            quassiDocumentInput.addEventListener("change", () => {
+                quassiDocumentName.textContent = quassiDocumentInput.files[0] ? quassiDocumentInput.files[0].name : "No file selected";
+            });
+
+            if (quassiClear) {
+                quassiClear.addEventListener("click", clearQuassiHistory);
+            }
+
+            renderHistory();
+            scrollQuassiToBottom();
+        </script>
+    {% endif %}
+</body>
+</html>

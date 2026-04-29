@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign Up | Job Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: "Space Grotesk", system-ui, sans-serif; }
+    </style>
+</head>
+<body class="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.18),_transparent_34%),linear-gradient(160deg,_#0f172a,_#1e293b_45%,_#e2e8f0_180%)] text-slate-900">
+    <div class="mx-auto flex min-h-screen max-w-6xl items-center px-4 py-10 sm:px-6 lg:px-8">
+        <div class="grid w-full gap-8 lg:grid-cols-[1.05fr_0.95fr]">
+            <section class="rounded-[2rem] border border-white/15 bg-white/10 p-8 text-white shadow-2xl backdrop-blur">
+                <p class="font-mono text-xs uppercase tracking-[0.3em] text-emerald-200">Job Tracker</p>
+                <h1 class="mt-4 max-w-2xl text-4xl font-bold tracking-tight sm:text-5xl">Create a workspace that stays organized for you.</h1>
+                <p class="mt-5 max-w-2xl text-sm leading-7 text-slate-200">
+                    Build your own application dashboard, keep portal jobs flowing into To Apply, and let Quassi search your tracked roles and uploaded documents.
+                </p>
+                <div class="mt-8 grid gap-4 sm:grid-cols-3">
+                    <div class="rounded-3xl bg-white/10 p-4">
+                        <p class="font-mono text-xs uppercase tracking-[0.25em] text-slate-300">Private Data</p>
+                        <p class="mt-2 text-sm text-slate-100">Each user gets their own tables, columns, dashboard widgets, and fetched jobs.</p>
+                    </div>
+                    <div class="rounded-3xl bg-white/10 p-4">
+                        <p class="font-mono text-xs uppercase tracking-[0.25em] text-slate-300">Email Verification</p>
+                        <p class="mt-2 text-sm text-slate-100">If SMTP is configured, new accounts are verified before they can sign in.</p>
+                    </div>
+                    <div class="rounded-3xl bg-white/10 p-4">
+                        <p class="font-mono text-xs uppercase tracking-[0.25em] text-slate-300">Ready For OSS</p>
+                        <p class="mt-2 text-sm text-slate-100">The signup flow works without exposing admin-only setup steps.</p>
+                    </div>
+                </div>
+            </section>
+            <section class="rounded-[2rem] border border-white/80 bg-white/90 p-8 shadow-2xl backdrop-blur">
+                {% if verification_pending %}
+                    <p class="font-mono text-xs uppercase tracking-[0.3em] text-emerald-600">Verify email</p>
+                    <h2 class="mt-3 text-3xl font-bold tracking-tight">Check your inbox</h2>
+                    <p class="mt-4 text-sm leading-7 text-slate-600">
+                        We sent a verification link to <span class="font-semibold text-slate-900">{{ verification_email }}</span>. Open that link to activate your account, then come back here to sign in.
+                    </p>
+                    <div class="mt-8">
+                        <a href="{% url 'login' %}" class="inline-flex rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">Back to login</a>
+                    </div>
+                {% else %}
+                    <p class="font-mono text-xs uppercase tracking-[0.3em] text-emerald-600">Sign up</p>
+                    <h2 class="mt-3 text-3xl font-bold tracking-tight">Create your account</h2>
+                    <p class="mt-3 text-sm text-slate-600">Use your full name, a valid email, and a password you will remember.</p>
+                    <form method="post" class="mt-8 space-y-5">
+                        {% csrf_token %}
+                        {% if form.non_field_errors %}
+                            <div class="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                                {{ form.non_field_errors|join:", " }}
+                            </div>
+                        {% endif %}
+                        {% for field in form %}
+                            <div>
+                                <label class="text-sm font-medium text-slate-700" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                                <div class="mt-2">{{ field }}</div>
+                                {% if field.help_text %}
+                                    <p class="mt-2 text-xs text-slate-500">{{ field.help_text }}</p>
+                                {% endif %}
+                                {% if field.errors %}
+                                    <p class="mt-2 text-sm text-rose-600">{{ field.errors|join:", " }}</p>
+                                {% endif %}
+                            </div>
+                        {% endfor %}
+                        <button class="w-full rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800" type="submit">Create account</button>
+                    </form>
+                    <div class="mt-6 flex items-center justify-between gap-4 text-sm">
+                        <span class="text-slate-500">Already have an account?</span>
+                        <a href="{% url 'login' %}" class="font-semibold text-emerald-700 transition hover:text-emerald-800">Sign in</a>
+                    </div>
+                {% endif %}
+            </section>
+        </div>
+    </div>
+</body>
+</html>

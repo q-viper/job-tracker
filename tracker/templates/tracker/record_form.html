@@ -1,0 +1,174 @@
+{% extends "tracker/base.html" %}
+
+{% block title %}{{ page_title }} | Job Tracker{% endblock %}
+
+{% block content %}
+    <section class="mx-auto max-w-4xl rounded-[2rem] border border-white/70 bg-white/85 p-6 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85 sm:p-8">
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+                <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">{{ table.name }}</p>
+                <h2 class="mt-2 text-3xl font-bold tracking-tight dark:text-slate-100">{{ page_title }}</h2>
+                <p class="mt-3 text-sm text-slate-600 dark:text-slate-300">{{ page_description }}</p>
+            </div>
+            <a href="{% if table.slug == 'to-apply' %}{% url 'to_apply_list' %}{% elif table.slug == 'applied' %}{% url 'applied_list' %}{% else %}{% url 'workspace_table' table.slug %}{% endif %}" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Back</a>
+        </div>
+
+        {% if table.slug == 'dashboard' %}
+            <div class="mt-6 rounded-3xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-700 dark:bg-slate-950/60">
+                <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Builder Guide</p>
+                <p class="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                    Choose a source table, then pick the group-by and metric columns. For counts, leave metric column empty. For filters, use semicolons like <code>type=PhD;result=Rejected</code>.
+                </p>
+            </div>
+        {% endif %}
+
+        <form method="post" class="mt-8 space-y-6">
+            {% csrf_token %}
+            {% for field in form %}
+                <div class="rounded-3xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-700 dark:bg-slate-950/60">
+                    <label class="text-sm font-semibold text-slate-800 dark:text-slate-100" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                    <div>{{ field }}</div>
+                    {% if field.name == 'url' %}
+                        <p id="url-inference-status" class="mt-2 text-xs text-slate-500 dark:text-slate-400">Paste a job link and the form will try to infer role, source, type, and notes.</p>
+                    {% endif %}
+                    {% if field.help_text %}
+                        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">{{ field.help_text }}</p>
+                    {% endif %}
+                    {% if field.errors %}
+                        <p class="mt-2 text-sm text-rose-600">{{ field.errors|join:", " }}</p>
+                    {% endif %}
+                </div>
+            {% endfor %}
+            <div class="flex flex-wrap gap-3">
+                <button class="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400" type="submit">{% if is_edit %}Save changes{% else %}Create entry{% endif %}</button>
+                <a href="{% if table.slug == 'to-apply' %}{% url 'to_apply_list' %}{% elif table.slug == 'applied' %}{% url 'applied_list' %}{% else %}{% url 'workspace_table' table.slug %}{% endif %}" class="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Cancel</a>
+            </div>
+        </form>
+    </section>
+
+    {% if source_records_json %}
+        <script>
+            const sourceSelect = document.getElementById("id_source_row_key");
+            const sourceRecords = JSON.parse("{{ source_records_json|escapejs }}");
+            const sourceMap = Object.fromEntries(sourceRecords.map((item) => [item.row_key, item.values]));
+            const targetFields = ["role-title", "url", "type"];
+
+            if (sourceSelect) {
+                sourceSelect.addEventListener("change", (event) => {
+                    const selected = sourceMap[event.target.value];
+                    if (!selected) {
+                        return;
+                    }
+                    targetFields.forEach((slug) => {
+                        const input = document.getElementById(`id_${slug}`);
+                        if (input && !input.value && selected[slug]) {
+                            input.value = selected[slug];
+                        }
+                    });
+                });
+            }
+        </script>
+    {% endif %}
+
+    {% if dashboard_columns_json %}
+        <script>
+            const dashboardColumnsMap = JSON.parse("{{ dashboard_columns_json|escapejs }}");
+            const sourceTableSelect = document.getElementById("id_source-table");
+            const groupBySelect = document.getElementById("id_group-by-column");
+            const metricColumnSelect = document.getElementById("id_metric-column");
+
+            function refillSelect(selectElement, sourceSlug, placeholder) {
+                if (!selectElement) {
+                    return;
+                }
+                const selectedValue = selectElement.value;
+                selectElement.innerHTML = "";
+                const emptyOption = document.createElement("option");
+                emptyOption.value = "";
+                emptyOption.textContent = placeholder;
+                selectElement.appendChild(emptyOption);
+
+                (dashboardColumnsMap[sourceSlug] || []).forEach((columnSlug) => {
+                    const option = document.createElement("option");
+                    option.value = columnSlug;
+                    option.textContent = columnSlug;
+                    if (columnSlug === selectedValue) {
+                        option.selected = true;
+                    }
+                    selectElement.appendChild(option);
+                });
+            }
+
+            if (sourceTableSelect) {
+                sourceTableSelect.addEventListener("change", (event) => {
+                    refillSelect(groupBySelect, event.target.value, "No grouping");
+                    refillSelect(metricColumnSelect, event.target.value, "Not needed for count records");
+                });
+            }
+        </script>
+    {% endif %}
+
+    <script>
+        const urlInput = document.getElementById("id_url");
+        const urlInferenceStatus = document.getElementById("url-inference-status");
+        let lastInferredUrl = "";
+
+        function updateInferenceStatus(message, tone = "muted") {
+            if (!urlInferenceStatus) {
+                return;
+            }
+            const classes = {
+                muted: "text-slate-500 dark:text-slate-400",
+                busy: "text-sky-600 dark:text-sky-300",
+                success: "text-emerald-600 dark:text-emerald-300",
+                error: "text-rose-600",
+            };
+            urlInferenceStatus.className = `mt-2 text-xs ${classes[tone] || classes.muted}`;
+            urlInferenceStatus.textContent = message;
+        }
+
+        async function inferFromUrl() {
+            if (!urlInput) {
+                return;
+            }
+            const urlValue = (urlInput.value || "").trim();
+            if (!urlValue || urlValue === lastInferredUrl || !/^https?:\/\//i.test(urlValue)) {
+                return;
+            }
+            lastInferredUrl = urlValue;
+            updateInferenceStatus("Looking up the page and filling what I can...", "busy");
+            try {
+                const response = await fetch("{{ url_inference_api_url }}", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRFToken": document.querySelector("#quassi-csrf-form input[name=csrfmiddlewaretoken]").value,
+                    },
+                    body: JSON.stringify({
+                        table_slug: "{{ table.slug }}",
+                        url: urlValue,
+                    }),
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload.detail || "Could not infer fields from that URL.");
+                }
+                Object.entries(payload.values || {}).forEach(([slug, value]) => {
+                    const field = document.getElementById(`id_${slug}`);
+                    if (!field || field.value) {
+                        return;
+                    }
+                    field.value = value;
+                });
+                updateInferenceStatus("Fields were inferred from the page. You can still edit anything before saving.", "success");
+            } catch (error) {
+                updateInferenceStatus(error.message || "Could not infer fields from that URL.", "error");
+            }
+        }
+
+        if (urlInput) {
+            urlInput.addEventListener("blur", inferFromUrl);
+            urlInput.addEventListener("change", inferFromUrl);
+        }
+    </script>
+{% endblock %}
