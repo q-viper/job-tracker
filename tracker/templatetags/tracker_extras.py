@@ -1,4 +1,5 @@
 from django import template
+from tracker.services import infer_progress
 
 register = template.Library()
 
@@ -34,3 +35,8 @@ def status_chip_classes(value: str) -> str:
             "slate": "bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200",
         }[normalized]
     return "bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200"
+
+
+@register.filter
+def inferred_progress(record) -> str:
+    return infer_progress(record)

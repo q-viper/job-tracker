@@ -51,6 +51,7 @@ class DynamicRecordServiceTests(TestCase):
                 (self.applied, "Role / Title", "role-title", DynamicColumn.DataType.TEXT),
                 (self.applied, "URL", "url", DynamicColumn.DataType.URL),
                 (self.applied, "Type", "type", DynamicColumn.DataType.TEXT),
+                (self.applied, "Result", "result", DynamicColumn.DataType.STATUS),
                 (self.applied, "AI Reliance", "ai-reliance", DynamicColumn.DataType.TEXT),
                 (
                     self.applied,
@@ -334,7 +335,10 @@ class DynamicRecordServiceTests(TestCase):
         records = view.sort_records_for_display(get_records(self.to_apply, self.user), self.to_apply)
 
         self.assertEqual(records[0].values["role-title"], "Early deadline")
-        self.assertEqual(records[-1].values["role-title"], "Missing deadline")
+        self.assertCountEqual(
+            [records[-2].values["role-title"], records[-1].values["role-title"]],
+            ["Invalid deadline", "Missing deadline"],
+        )
 
     def test_to_apply_defaults_to_deadline_ascending_with_missing_last(self):
         save_record(
@@ -503,7 +507,8 @@ class DynamicRecordServiceTests(TestCase):
                 "role-title": "Vision PhD",
                 "url": "https://example.com/vision-phd",
                 "type": "PhD",
-                "application-progress": "Interview",
+                "application-progress": "Applied",
+                "result": "Rejected",
             },
         )
         self.client.force_login(self.user)
@@ -511,7 +516,8 @@ class DynamicRecordServiceTests(TestCase):
         response = self.client.get(reverse("dashboard"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Submitted 02 May 2026")
+        self.assertContains(response, "Submitted 02/05/2026")
+        self.assertContains(response, "Rejected")
 
     def test_export_applications_downloads_user_tables_as_workbook(self):
         follow_up = DynamicTable.objects.create(

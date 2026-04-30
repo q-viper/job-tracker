@@ -65,7 +65,7 @@
                                 <p class="max-w-xl break-words leading-6">{{ job.summary|default:"-" }}</p>
                             </td>
                             <td class="px-4 py-4 text-sm text-slate-700 dark:text-slate-200">
-                                {{ job.fetched_at|date:"d M Y H:i" }}
+                                {{ job.fetched_at|date:"d/m/Y H:i" }}
                             </td>
                             <td class="px-4 py-4">
                                 {% if job.added_to_apply %}

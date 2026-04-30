@@ -534,7 +534,7 @@ def humanize_value(value: str, column: DynamicColumn) -> str:
         return "-"
     if column.data_type == DynamicColumn.DataType.DATE:
         try:
-            return datetime.fromisoformat(value).strftime("%d %b %Y")
+            return datetime.fromisoformat(value).strftime("%d/%m/%Y")
         except ValueError:
             return value
     return value
