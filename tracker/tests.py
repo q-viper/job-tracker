@@ -48,6 +48,7 @@ class DynamicRecordServiceTests(TestCase):
                 (self.applied, "Role / Title", "role-title", DynamicColumn.DataType.TEXT),
                 (self.applied, "URL", "url", DynamicColumn.DataType.URL),
                 (self.applied, "Type", "type", DynamicColumn.DataType.TEXT),
+                (self.applied, "AI Reliance", "ai-reliance", DynamicColumn.DataType.TEXT),
                 (
                     self.applied,
                     "Application Progress",
@@ -206,6 +207,67 @@ class DynamicRecordServiceTests(TestCase):
         self.assertIn("applied to 1", payload["answer"].lower())
         self.assertIn("phd", payload["answer"].lower())
         self.assertFalse(payload["sources"])
+
+    def test_rag_counts_ai_reliance_queries_with_short_tokens_and_numbers(self):
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-29",
+                "role-title": "Research Scientist",
+                "url": "https://example.com/research-scientist",
+                "type": "Job",
+                "application-progress": "Applied",
+                "ai-reliance": "100",
+            },
+        )
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-29",
+                "role-title": "Vision PhD",
+                "url": "https://example.com/vision-phd",
+                "type": "PhD",
+                "application-progress": "Applied",
+                "ai-reliance": "100",
+            },
+        )
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-29",
+                "role-title": "ML Engineer",
+                "url": "https://example.com/ml-engineer",
+                "type": "Job",
+                "application-progress": "Applied",
+                "ai-reliance": "50",
+            },
+        )
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-29",
+                "role-title": "Role with 50 in the URL",
+                "url": "https://example.com/roles/50-in-url",
+                "type": "Job",
+                "application-progress": "Applied",
+                "ai-reliance": "10",
+            },
+        )
+
+        with patch("tracker.rag.get_local_generation_pipeline", return_value=None):
+            full_ai_payload = chat_with_rag(self.user, "How many times did I use AI 100%")
+            partial_ai_payload = chat_with_rag(self.user, "How many times did I use AI 50%")
+
+        self.assertIn("2 applied roles", full_ai_payload["answer"])
+        self.assertIn("AI reliance 100", full_ai_payload["answer"])
+        self.assertFalse(full_ai_payload["sources"])
+        self.assertIn("1 applied roles", partial_ai_payload["answer"])
+        self.assertIn("AI reliance 50", partial_ai_payload["answer"])
+        self.assertFalse(partial_ai_payload["sources"])
 
     def test_to_apply_date_sort_handles_blank_and_invalid_deadlines(self):
         save_record(

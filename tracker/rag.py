@@ -30,6 +30,17 @@ RAG_DEFAULT_PROMPTS = [
     "Which deadlines are coming up this week?",
 ]
 
+SHORT_QUERY_TOKENS = {
+    "ai",
+    "ml",
+    "cv",
+    "nlp",
+    "llm",
+    "ui",
+    "ux",
+    "qa",
+}
+
 STOPWORDS = {
     "the",
     "and",
@@ -140,6 +151,20 @@ THANKS_TERMS = (
 COUNT_FILTER_IGNORE_TOKENS = {
     "count",
     "counts",
+    "did",
+    "do",
+    "does",
+    "done",
+    "how",
+    "have",
+    "has",
+    "had",
+    "use",
+    "used",
+    "using",
+    "time",
+    "times",
+    "often",
     "number",
     "numbers",
     "many",
@@ -181,7 +206,10 @@ def tokenize(text: str) -> list[str]:
     return [
         token
         for token in re.findall(r"[a-zA-Z0-9\-\+]+", text.lower())
-        if len(token) > 2 and token not in STOPWORDS
+        if (
+            token not in STOPWORDS
+            and (len(token) > 2 or token.isdigit() or token in SHORT_QUERY_TOKENS)
+        )
     ]
 
 
@@ -587,6 +615,18 @@ def records_matching_tokens(records, tokens: list[str]) -> list[Any]:
     return matched
 
 
+def records_matching_ai_reliance(records, numeric_tokens: list[str]) -> list[Any]:
+    matched = []
+    for record in records:
+        ai_reliance = normalize_text(record.values.get("ai-reliance")).lower()
+        if not ai_reliance:
+            continue
+        if numeric_tokens and not all(token in ai_reliance for token in numeric_tokens):
+            continue
+        matched.append(record)
+    return matched
+
+
 def portal_jobs_matching_tokens(jobs, tokens: list[str]) -> list[Any]:
     if not tokens:
         return list(jobs)
@@ -612,6 +652,29 @@ def count_answer_for_query(user, query: str) -> str | None:
     filter_tokens = count_filter_tokens(query)
     filter_label = format_count_filter(filter_tokens)
     scope = count_scope_for_query(query)
+    numeric_filter_tokens = [token for token in filter_tokens if token.isdigit()]
+    mentions_ai_reliance = any(token in {"ai", "ai-reliance", "reliance"} for token in filter_tokens)
+
+    if mentions_ai_reliance:
+        applied_records = get_records(get_user_table(user, "applied"), user)
+        records = records_matching_ai_reliance(applied_records, numeric_filter_tokens)
+        remaining_tokens = [
+            token
+            for token in filter_tokens
+            if token not in {"ai", "ai-reliance", "reliance"} and token not in numeric_filter_tokens
+        ]
+        if remaining_tokens:
+            records = records_matching_tokens(records, remaining_tokens)
+        ai_label = (
+            f"AI reliance {' / '.join(numeric_filter_tokens)}"
+            if numeric_filter_tokens
+            else "a saved AI reliance value"
+        )
+        extra_label = format_count_filter(remaining_tokens)
+        return (
+            f"You have {len(records)} applied roles with {ai_label}"
+            f"{' matching ' + extra_label if extra_label else ''}."
+        )
 
     if "interview" in lowered:
         records = get_records(get_user_table(user, "applied"), user)
