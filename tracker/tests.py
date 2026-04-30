@@ -12,7 +12,7 @@ from openpyxl import load_workbook
 from .chat_handler import ChatHandler
 from .models import ChatModelConfig, DynamicColumn, DynamicTable, PortalJobSuggestion
 from .rag import chat_with_rag
-from .services import get_records, move_to_applied, save_record
+from .services import aggregate_records, get_records, move_to_applied, save_record
 from .views import ToApplyListView
 
 
@@ -310,6 +310,145 @@ class DynamicRecordServiceTests(TestCase):
 
         self.assertEqual(records[0].values["role-title"], "Early deadline")
         self.assertEqual(records[-1].values["role-title"], "Missing deadline")
+
+    def test_to_apply_defaults_to_deadline_ascending_with_missing_last(self):
+        save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Later deadline",
+                "url": "https://example.com/later",
+                "type": "PhD",
+                "deadline": "2026-05-10",
+            },
+        )
+        save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Missing deadline",
+                "url": "https://example.com/missing",
+                "type": "Job",
+                "deadline": "",
+            },
+        )
+        save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Earlier deadline",
+                "url": "https://example.com/earlier",
+                "type": "Internship",
+                "deadline": "2026-05-01",
+            },
+        )
+
+        view = ToApplyListView()
+        view.request = SimpleNamespace(GET={})
+
+        records = view.sort_records_for_display(get_records(self.to_apply, self.user), self.to_apply)
+
+        self.assertEqual(view.get_sort_field(self.to_apply), "deadline")
+        self.assertEqual(view.get_sort_direction(self.to_apply), "asc")
+        self.assertEqual(records[0].values["role-title"], "Earlier deadline")
+        self.assertEqual(records[1].values["role-title"], "Later deadline")
+        self.assertEqual(records[-1].values["role-title"], "Missing deadline")
+
+    def test_applied_defaults_to_date_descending_with_missing_last(self):
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-05-10",
+                "role-title": "Latest application",
+                "url": "https://example.com/latest",
+                "type": "Job",
+            },
+        )
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "",
+                "role-title": "Missing date application",
+                "url": "https://example.com/missing-date",
+                "type": "PhD",
+            },
+        )
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-05-01",
+                "role-title": "Older application",
+                "url": "https://example.com/older",
+                "type": "Internship",
+            },
+        )
+
+        view = ToApplyListView()
+        view.request = SimpleNamespace(GET={})
+
+        records = view.sort_records_for_display(get_records(self.applied, self.user), self.applied)
+
+        self.assertEqual(view.get_sort_field(self.applied), "date")
+        self.assertEqual(view.get_sort_direction(self.applied), "desc")
+        self.assertEqual(records[0].values["role-title"], "Latest application")
+        self.assertEqual(records[1].values["role-title"], "Older application")
+        self.assertEqual(records[-1].values["role-title"], "Missing date application")
+
+    def test_date_grouped_aggregations_stay_chronological_and_keep_unspecified_last(self):
+        save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Middle",
+                "url": "https://example.com/middle",
+                "type": "PhD",
+                "deadline": "2026-05-10",
+            },
+        )
+        save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Earliest",
+                "url": "https://example.com/earliest",
+                "type": "PhD",
+                "deadline": "2026-05-01",
+            },
+        )
+        save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Latest duplicate",
+                "url": "https://example.com/latest-duplicate",
+                "type": "Job",
+                "deadline": "2026-05-10",
+            },
+        )
+        save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "No deadline",
+                "url": "https://example.com/no-deadline",
+                "type": "Job",
+                "deadline": "",
+            },
+        )
+
+        labels, values = aggregate_records(
+            get_records(self.to_apply, self.user),
+            group_by_column="deadline",
+            aggregation="Count Records",
+            metric_column="",
+            limit=10,
+        )
+
+        self.assertEqual(labels, ["2026-05-01", "2026-05-10", "Unspecified"])
+        self.assertEqual(values, [1.0, 2.0, 1.0])
 
     def test_all_portal_jobs_page_lists_scraped_jobs_in_table(self):
         PortalJobSuggestion.objects.create(

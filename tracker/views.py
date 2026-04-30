@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
-from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from django.conf import settings
 from django.contrib import messages
@@ -36,6 +34,8 @@ from .services import (
     build_dashboard,
     count_records,
     dashboard_template_initial_values,
+    default_sort_direction_for_field,
+    default_sort_field_for_table,
     delete_record,
     default_portal_keywords_text,
     ensure_user_workspace,
@@ -45,11 +45,10 @@ from .services import (
     make_unique_column_slug,
     make_unique_table_slug,
     move_to_applied,
-    normalize_text,
-    parse_number,
     refresh_all_portal_jobs_for_user,
     refresh_portal_jobs,
     save_record,
+    sort_records_with_field,
 )
 from .notifications import build_email_body, upcoming_deadlines_for_user
 from .smtp_handler import SMTPHandler
@@ -251,13 +250,18 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
     def get_view_mode(self) -> str:
         return self.request.GET.get("view", "cards") if self.request.GET.get("view") in {"cards", "table"} else "cards"
 
-    def get_sort_direction(self) -> str:
-        return self.request.GET.get("dir", "desc") if self.request.GET.get("dir") in {"asc", "desc"} else "desc"
+    def get_sort_direction(self, table: DynamicTable) -> str:
+        requested = self.request.GET.get("dir")
+        if requested in {"asc", "desc"}:
+            return requested
+        return default_sort_direction_for_field(table, self.get_sort_field(table))
 
     def get_sort_field(self, table: DynamicTable) -> str:
         allowed = {"label", "created_at", "updated_at", *table.columns.filter(is_visible=True).values_list("slug", flat=True)}
-        requested = self.request.GET.get("sort", "updated_at")
-        return requested if requested in allowed else "updated_at"
+        requested = self.request.GET.get("sort")
+        if requested in allowed:
+            return requested
+        return default_sort_field_for_table(table)
 
     def get_sort_options(self, table: DynamicTable) -> list[dict[str, str]]:
         options = [
@@ -269,56 +273,13 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
             options.append({"value": column.slug, "label": column.name})
         return options
 
-    def _sort_value(self, table: DynamicTable, record, sort_field: str):
-        if sort_field == "label":
-            return (0, 2, normalize_text(record.label).lower())
-        if sort_field in {"created_at", "updated_at"}:
-            timestamp = getattr(record, sort_field)
-            return (0, 0, timestamp.timestamp()) if timestamp else (1, 99, "")
-        column = table.columns.filter(is_visible=True, slug=sort_field).first()
-        raw_value = normalize_text(record.values.get(sort_field))
-        if not raw_value:
-            return (1, 99, "")
-        if column and column.data_type == column.DataType.DATE:
-            try:
-                return (0, 0, datetime.fromisoformat(raw_value).timestamp())
-            except ValueError:
-                return (0, 2, raw_value.lower())
-        if column and column.data_type == column.DataType.NUMBER:
-            numeric_value = parse_number(raw_value)
-            if numeric_value is not None:
-                return (0, 1, numeric_value)
-        numeric_value = parse_number(raw_value)
-        if numeric_value is not None:
-            return (0, 1, numeric_value)
-        try:
-            return (0, 0, datetime.fromisoformat(raw_value).timestamp())
-        except ValueError:
-            pass
-        return (0, 2, raw_value.lower())
-
     def sort_records_for_display(self, records, table: DynamicTable):
-        sort_field = self.get_sort_field(table)
-        direction = self.get_sort_direction()
-        sortable_records: list[tuple[tuple[int, int, Any], Any]] = []
-        missing_records: list[Any] = []
-
-        for record in records:
-            sort_key = self._sort_value(table, record, sort_field)
-            if sort_key[0]:
-                missing_records.append(record)
-            else:
-                sortable_records.append((sort_key, record))
-
-        buckets: dict[int, list[tuple[Any, Any]]] = {}
-        for sort_key, record in sortable_records:
-            buckets.setdefault(sort_key[1], []).append((sort_key[2], record))
-
-        ordered_records: list[Any] = []
-        for type_rank in sorted(buckets):
-            bucket = sorted(buckets[type_rank], key=lambda item: item[0], reverse=direction == "desc")
-            ordered_records.extend(record for _, record in bucket)
-        return ordered_records + missing_records
+        return sort_records_with_field(
+            records,
+            table,
+            sort_field=self.get_sort_field(table),
+            direction=self.get_sort_direction(table),
+        )
 
     def get_extra_actions(self, table: DynamicTable) -> list[dict[str, str]]:
         return []
@@ -339,7 +300,7 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
                 "nav_section": self.nav_section or table.slug,
                 "view_mode": self.get_view_mode(),
                 "sort_field": self.get_sort_field(table),
-                "sort_direction": self.get_sort_direction(),
+                "sort_direction": self.get_sort_direction(table),
                 "sort_options": self.get_sort_options(table),
                 "extra_actions": self.get_extra_actions(table),
             }

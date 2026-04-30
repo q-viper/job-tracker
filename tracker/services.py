@@ -962,25 +962,113 @@ def build_label(values: dict[str, str]) -> str:
     return "Untitled record"
 
 
+def default_sort_field_for_table(table: DynamicTable) -> str:
+    columns = list(table.columns.filter(is_visible=True))
+    by_slug = {column.slug: column for column in columns}
+    for slug in ("deadline", "date"):
+        column = by_slug.get(slug)
+        if column and column.data_type == DynamicColumn.DataType.DATE:
+            return slug
+    first_date_column = next(
+        (column.slug for column in columns if column.data_type == DynamicColumn.DataType.DATE),
+        None,
+    )
+    return first_date_column or "updated_at"
+
+
+def default_sort_direction_for_field(table: DynamicTable, sort_field: str) -> str:
+    if sort_field == "deadline":
+        return "asc"
+    if sort_field in {"created_at", "updated_at"}:
+        return "desc"
+    column = table.columns.filter(is_visible=True, slug=sort_field).first()
+    if column and column.data_type == DynamicColumn.DataType.DATE:
+        return "desc"
+    return "desc"
+
+
+def record_sort_value(
+    record: GroupedRecord,
+    sort_field: str,
+    *,
+    column_lookup: dict[str, DynamicColumn] | None = None,
+) -> tuple[int, int, Any]:
+    if sort_field == "label":
+        return (0, 2, normalize_text(record.label).lower())
+    if sort_field in {"created_at", "updated_at"}:
+        timestamp = getattr(record, sort_field)
+        return (0, 0, timestamp.timestamp()) if timestamp else (1, 99, "")
+
+    raw_value = normalize_text(record.values.get(sort_field))
+    if not raw_value:
+        return (1, 99, "")
+
+    column = (column_lookup or {}).get(sort_field)
+    if column and column.data_type == DynamicColumn.DataType.DATE:
+        try:
+            return (0, 0, datetime.fromisoformat(raw_value).timestamp())
+        except ValueError:
+            return (1, 99, "")
+    if column and column.data_type == DynamicColumn.DataType.NUMBER:
+        numeric_value = parse_number(raw_value)
+        if numeric_value is not None:
+            return (0, 1, numeric_value)
+
+    numeric_value = parse_number(raw_value)
+    if numeric_value is not None:
+        return (0, 1, numeric_value)
+    try:
+        return (0, 0, datetime.fromisoformat(raw_value).timestamp())
+    except ValueError:
+        pass
+    return (0, 2, raw_value.lower())
+
+
+def sort_records_with_field(
+    records: list[GroupedRecord],
+    table: DynamicTable,
+    *,
+    sort_field: str,
+    direction: str,
+) -> list[GroupedRecord]:
+    column_lookup = {
+        column.slug: column
+        for column in table.columns.filter(is_visible=True)
+    }
+    sortable_records: list[tuple[tuple[int, int, Any], GroupedRecord]] = []
+    missing_records: list[GroupedRecord] = []
+
+    for record in records:
+        sort_key = record_sort_value(record, sort_field, column_lookup=column_lookup)
+        if sort_key[0]:
+            missing_records.append(record)
+        else:
+            sortable_records.append((sort_key, record))
+
+    buckets: dict[int, list[tuple[Any, GroupedRecord]]] = {}
+    for sort_key, record in sortable_records:
+        buckets.setdefault(sort_key[1], []).append((sort_key[2], record))
+
+    ordered_records: list[GroupedRecord] = []
+    for type_rank in sorted(buckets):
+        bucket = sorted(
+            buckets[type_rank],
+            key=lambda item: item[0],
+            reverse=direction == "desc",
+        )
+        ordered_records.extend(record for _, record in bucket)
+    return ordered_records + missing_records
+
+
 def sort_records(table: DynamicTable, records: list[GroupedRecord]) -> list[GroupedRecord]:
-    if table.slug == "applied":
-        return sorted(
-            records,
-            key=lambda record: (
-                record.values.get("date") or "",
-                record.updated_at.isoformat() if record.updated_at else "",
-            ),
-            reverse=True,
-        )
-    if table.slug in {"to-apply", "portals"}:
-        return sorted(
-            records,
-            key=lambda record: (
-                record.values.get("deadline") or "9999-12-31",
-                record.label.lower(),
-            ),
-        )
-    return sorted(records, key=lambda record: record.label.lower())
+    sort_field = default_sort_field_for_table(table)
+    direction = default_sort_direction_for_field(table, sort_field)
+    return sort_records_with_field(
+        records,
+        table,
+        sort_field=sort_field,
+        direction=direction,
+    )
 
 
 def get_records(table: DynamicTable, user) -> list[GroupedRecord]:
@@ -1604,7 +1692,20 @@ def aggregate_records(
         labels.append(label)
         values.append(float(total))
 
-    ordered = sorted(zip(labels, values), key=lambda item: item[1], reverse=True)
+    group_by_definition = records[0].table.columns.filter(slug=group_by_column).first() if records else None
+    if group_by_definition and group_by_definition.data_type == DynamicColumn.DataType.DATE:
+        def date_group_key(item: tuple[str, float]) -> tuple[int, Any]:
+            label = normalize_text(item[0])
+            if not label or label == "Unspecified":
+                return (1, "")
+            try:
+                return (0, datetime.fromisoformat(label).date())
+            except ValueError:
+                return (1, label.lower())
+
+        ordered = sorted(zip(labels, values), key=date_group_key)
+    else:
+        ordered = sorted(zip(labels, values), key=lambda item: (-item[1], item[0].lower()))
     if limit > 0:
         ordered = ordered[:limit]
     if not ordered:
@@ -1877,7 +1978,6 @@ def build_dashboard(user) -> dict[str, Any]:
     progress_counts = Counter(infer_progress(record) for record in applied_records)
     max_stage_count = max(progress_counts.values(), default=1)
     upcoming_deadlines = [record for record in to_apply_records if record.values.get("deadline")]
-    upcoming_deadlines.sort(key=lambda record: record.values.get("deadline") or "9999-12-31")
 
     metrics = [
         {

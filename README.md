@@ -1,6 +1,6 @@
 # Job Tracker
 
-Python fullstack job-search tracker built with Django, SQLite, DRF, Tailwind-styled templates, and a flexible per-user table system.
+Python fullstack job-search tracker built with Django, SQLite, DRF, Tailwind-styled templates, and a flexible per-user table system. And of course another vibecoded AI slop!
 
 ## What it includes
 
