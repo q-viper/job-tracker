@@ -5,9 +5,10 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 from .chat_handler import ChatHandler
 from .models import ChatModelConfig, DynamicColumn, DynamicTable, PortalJobSuggestion
@@ -67,6 +68,30 @@ class DynamicRecordServiceTests(TestCase):
                 data_type=data_type,
                 position=position,
             )
+
+    def build_uploaded_workbook(self) -> SimpleUploadedFile:
+        workbook = Workbook()
+        applied_sheet = workbook.active
+        applied_sheet.title = "Applied"
+        applied_sheet.append(["Date", "URL", "Name", "Source", "Type", "Result", "Result On", "AI Reliance", "Completed Stages", "Remarks"])
+        applied_sheet.append(["04/05/2026", "https://example.com/imported-applied", "Imported Company", "Example Board", "Job", "", "", "", "", ""])
+
+        portals_sheet = workbook.create_sheet("Portals")
+        portals_sheet.append(["S.N", "URL", "Name"])
+        portals_sheet.append([1, "https://example.com/imported-portal", "Imported Portal"])
+
+        to_apply_sheet = workbook.create_sheet("To Apply")
+        to_apply_sheet.append(["S.N.", "URL", "Deadline", "Type", "English Test"])
+        to_apply_sheet.append([1, "https://example.com/imported-to-apply", "09/05/2026", "PhD", ""])
+
+        payload = BytesIO()
+        workbook.save(payload)
+        payload.seek(0)
+        return SimpleUploadedFile(
+            "Applications.xlsx",
+            payload.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
     def test_save_record_groups_cells_into_single_row(self):
         save_record(
@@ -560,3 +585,72 @@ class DynamicRecordServiceTests(TestCase):
         follow_up_sheet = workbook["Follow Up"]
         self.assertEqual(follow_up_sheet["A1"].value, "Status Note")
         self.assertEqual(follow_up_sheet["A2"].value, "Waiting for recruiter reply")
+
+    def test_manage_tables_can_append_uploaded_workbook(self):
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-01",
+                "role-title": "Existing application",
+                "url": "https://example.com/existing",
+                "type": "Job",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("manage_tables"),
+            data={
+                "import_workbook": "1",
+                "import_mode": "append",
+                "workbook": self.build_uploaded_workbook(),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(len(get_records(self.applied, self.user)), 2)
+        self.assertEqual(len(get_records(self.to_apply, self.user)), 1)
+        self.assertEqual(len(get_records(self.portals, self.user)), 1)
+
+    def test_manage_tables_can_replace_with_uploaded_workbook(self):
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-01",
+                "role-title": "Existing application",
+                "url": "https://example.com/existing",
+                "type": "Job",
+            },
+        )
+        save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Existing to apply",
+                "url": "https://example.com/existing-to-apply",
+                "type": "PhD",
+                "deadline": "2026-04-15",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("manage_tables"),
+            data={
+                "import_workbook": "1",
+                "import_mode": "replace",
+                "workbook": self.build_uploaded_workbook(),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        applied_records = get_records(self.applied, self.user)
+        to_apply_records = get_records(self.to_apply, self.user)
+        portal_records = get_records(self.portals, self.user)
+        self.assertEqual(len(applied_records), 1)
+        self.assertEqual(len(to_apply_records), 1)
+        self.assertEqual(len(portal_records), 1)
+        self.assertEqual(applied_records[0].values["url"], "https://example.com/imported-applied")
+        self.assertEqual(to_apply_records[0].values["url"], "https://example.com/imported-to-apply")

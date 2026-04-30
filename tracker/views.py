@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 import json
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from django.conf import settings
 from django.contrib import messages
@@ -25,6 +26,7 @@ from .forms import (
     SignupForm,
     TableDefinitionForm,
     ToApplyForm,
+    WorkbookImportForm,
 )
 from .email_verification import send_verification_email, verify_user_from_token
 from .models import DynamicTable, PortalJobSuggestion
@@ -42,6 +44,7 @@ from .services import (
     get_record,
     get_records,
     get_user_table,
+    import_workbook_for_user,
     make_unique_column_slug,
     make_unique_table_slug,
     move_to_applied,
@@ -502,6 +505,7 @@ class ManageTablesView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
             {
                 "nav_section": "tables",
                 "table_form": kwargs.get("table_form") or TableDefinitionForm(),
+                "workbook_import_form": kwargs.get("workbook_import_form") or WorkbookImportForm(),
                 "tables": [
                     {
                         "table": table,
@@ -513,7 +517,41 @@ class ManageTablesView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
         )
         return context
 
+    def handle_workbook_import(self, request):
+        form = WorkbookImportForm(request.POST, request.FILES)
+        if not form.is_valid():
+            return self.render_to_response(self.get_context_data(workbook_import_form=form))
+
+        workbook = form.cleaned_data["workbook"]
+        replace = form.cleaned_data["import_mode"] == WorkbookImportForm.ImportMode.REPLACE
+        temp_path: Path | None = None
+
+        try:
+            with NamedTemporaryFile(delete=False, suffix=".xlsx") as temp_file:
+                for chunk in workbook.chunks():
+                    temp_file.write(chunk)
+                temp_path = Path(temp_file.name)
+
+            imported_counts = import_workbook_for_user(temp_path, request.user, replace=replace)
+        except Exception as exc:
+            form.add_error(None, f"Could not import that workbook: {exc}")
+            return self.render_to_response(self.get_context_data(workbook_import_form=form))
+        finally:
+            if temp_path and temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+
+        mode_label = "replaced" if replace else "appended"
+        counts_text = ", ".join(f"{slug}: {count}" for slug, count in imported_counts.items())
+        messages.success(
+            request,
+            f"Workbook imported successfully. Existing data was {mode_label}. {counts_text}",
+        )
+        return redirect("manage_tables")
+
     def post(self, request, *args, **kwargs):
+        if "import_workbook" in request.POST:
+            return self.handle_workbook_import(request)
+
         form = TableDefinitionForm(request.POST)
         if form.is_valid():
             table = form.save(commit=False)

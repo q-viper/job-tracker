@@ -33,6 +33,40 @@ class TableDefinitionForm(forms.ModelForm):
             apply_widget_classes(field)
 
 
+class WorkbookImportForm(forms.Form):
+    class ImportMode:
+        APPEND = "append"
+        REPLACE = "replace"
+
+    IMPORT_MODE_CHOICES = (
+        (ImportMode.APPEND, "Append to current data"),
+        (ImportMode.REPLACE, "Remove all and import again"),
+    )
+
+    workbook = forms.FileField(
+        label="Workbook file",
+        help_text="Upload an .xlsx file shaped like your Applications workbook.",
+    )
+    import_mode = forms.ChoiceField(
+        label="Import mode",
+        choices=IMPORT_MODE_CHOICES,
+        initial=ImportMode.APPEND,
+        help_text="Append keeps existing records. Remove all clears current records first.",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            apply_widget_classes(field)
+        self.fields["workbook"].widget.attrs["accept"] = ".xlsx"
+
+    def clean_workbook(self):
+        workbook = self.cleaned_data["workbook"]
+        if not workbook.name.lower().endswith(".xlsx"):
+            raise forms.ValidationError("Upload an .xlsx workbook.")
+        return workbook
+
+
 class ColumnDefinitionForm(forms.ModelForm):
     class Meta:
         model = DynamicColumn
