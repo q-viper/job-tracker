@@ -328,11 +328,16 @@
                     {% for record in recent_applied %}
                         <div class="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
                             <p class="break-words font-semibold text-slate-900 dark:text-slate-100">{{ record.label }}</p>
-                            {% for cell in record.cells %}
-                                {% if cell.column.slug == 'application-progress' and cell.value %}
-                                    <span class="mt-3 inline-flex rounded-full px-3 py-1 text-xs font-medium {{ cell.value|status_chip_classes }}">{{ cell.value }}</span>
-                                {% endif %}
-                            {% endfor %}
+                            <div class="mt-3 flex flex-wrap items-center gap-3">
+                                {% for cell in record.cells %}
+                                    {% if cell.column.slug == 'date' and cell.value %}
+                                        <p class="text-sm text-slate-600 dark:text-slate-300">Submitted {{ cell.display_value }}</p>
+                                    {% endif %}
+                                    {% if cell.column.slug == 'application-progress' and cell.value %}
+                                        <span class="inline-flex rounded-full px-3 py-1 text-xs font-medium {{ cell.value|status_chip_classes }}">{{ cell.value }}</span>
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
                         </div>
                     {% empty %}
                         <p class="text-sm text-slate-600 dark:text-slate-300">Applied records will show up here once you start tracking them.</p>

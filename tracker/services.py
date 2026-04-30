@@ -19,8 +19,9 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 from django.utils.text import slugify
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.cell.cell import Cell
+from openpyxl.utils import get_column_letter
 
 from .models import DynamicColumn, DynamicData, DynamicTable, PortalJobSuggestion
 
@@ -1261,6 +1262,174 @@ def import_workbook_for_user(
 
             imported_counts[table.slug] = imported_rows
     return imported_counts
+
+
+def workbook_template_sheets(template_path: str | Path | None = None) -> list[dict[str, Any]]:
+    workbook_path = Path(template_path) if template_path else None
+    if not workbook_path or not workbook_path.exists():
+        return []
+
+    workbook = load_workbook(workbook_path, read_only=True)
+    template_sheets: list[dict[str, Any]] = []
+    try:
+        for sheet in workbook.worksheets:
+            try:
+                header_row = next(sheet.iter_rows(min_row=1, max_row=1))
+            except StopIteration:
+                header_row = []
+            headers = [normalize_text(cell.value) for cell in header_row if normalize_text(cell.value)]
+            template_sheets.append(
+                {
+                    "slug": normalize_slug(sheet.title),
+                    "title": sheet.title,
+                    "headers": headers,
+                }
+            )
+    finally:
+        workbook.close()
+
+    return template_sheets
+
+
+def make_excel_sheet_title(title: str, used_titles: set[str]) -> str:
+    cleaned = re.sub(r"[\[\]\*:/\\?]", " ", normalize_text(title) or "Sheet").strip()
+    base_title = cleaned[:31] or "Sheet"
+    candidate = base_title
+    counter = 2
+    while candidate in used_titles:
+        suffix = f" {counter}"
+        candidate = f"{base_title[: 31 - len(suffix)]}{suffix}"
+        counter += 1
+    used_titles.add(candidate)
+    return candidate
+
+
+def export_header_items(table: DynamicTable, template_headers: list[str]) -> list[dict[str, str]]:
+    columns = list(table.columns.all())
+    columns_by_slug = {column.slug: column for column in columns}
+    header_items: list[dict[str, str]] = []
+    used_slugs: set[str] = set()
+
+    for header in template_headers:
+        header_slug = normalize_slug(header)
+        if header_slug in DEPRECATED_COLUMN_SLUGS:
+            header_items.append({"label": header, "slug": ""})
+            continue
+        column = columns_by_slug.get(header_slug)
+        if not column:
+            continue
+        header_items.append({"label": header, "slug": column.slug})
+        used_slugs.add(column.slug)
+
+    for column in columns:
+        if column.slug in used_slugs:
+            continue
+        header_items.append({"label": column.name, "slug": column.slug})
+
+    return header_items
+
+
+def export_cell_display_value(table: DynamicTable, record: GroupedRecord, column: DynamicColumn) -> str:
+    raw_value = normalize_text(record.values.get(column.slug))
+    if not raw_value:
+        return ""
+    if table.slug == "applied" and column.slug == "url":
+        return normalize_text(record.values.get("role-title")) or raw_value
+    return raw_value
+
+
+def build_export_workbook(
+    user,
+    template_path: str | Path | None = None,
+) -> Workbook:
+    template_sheets = workbook_template_sheets(template_path)
+    template_by_slug = {item["slug"]: item for item in template_sheets}
+    tables = list(
+        DynamicTable.objects.filter(owner=user)
+        .exclude(slug="dashboard")
+        .prefetch_related("columns")
+        .order_by("display_order", "name")
+    )
+    tables_by_slug = {table.slug: table for table in tables}
+    ordered_tables: list[DynamicTable] = []
+
+    for template_sheet in template_sheets:
+        table = tables_by_slug.pop(template_sheet["slug"], None)
+        if table:
+            ordered_tables.append(table)
+
+    ordered_tables.extend(
+        sorted(
+            tables_by_slug.values(),
+            key=lambda table: (table.display_order, table.name.lower()),
+        )
+    )
+
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    used_titles: set[str] = set()
+
+    for table in ordered_tables:
+        template_sheet = template_by_slug.get(table.slug)
+        sheet_title = template_sheet["title"] if template_sheet else table.name
+        worksheet = workbook.create_sheet(make_excel_sheet_title(sheet_title, used_titles))
+        header_items = export_header_items(table, template_sheet["headers"] if template_sheet else [])
+
+        if not header_items:
+            continue
+
+        column_widths: dict[int, int] = {}
+        column_map = {column.slug: column for column in table.columns.all()}
+
+        for column_index, header_item in enumerate(header_items, start=1):
+            worksheet.cell(row=1, column=column_index, value=header_item["label"])
+            column_widths[column_index] = len(header_item["label"])
+
+        records = get_records(table, user)
+        for row_index, record in enumerate(records, start=2):
+            for column_index, header_item in enumerate(header_items, start=1):
+                column_slug = header_item["slug"]
+                cell = worksheet.cell(row=row_index, column=column_index)
+
+                if not column_slug:
+                    cell.value = row_index - 1
+                    column_widths[column_index] = max(column_widths[column_index], len(str(cell.value)))
+                    continue
+
+                column = column_map[column_slug]
+                raw_value = normalize_text(record.values.get(column_slug))
+                if not raw_value:
+                    continue
+
+                display_value = export_cell_display_value(table, record, column)
+                display_text = display_value or raw_value
+
+                if column.data_type == DynamicColumn.DataType.DATE:
+                    try:
+                        cell.value = datetime.fromisoformat(raw_value).date()
+                        cell.number_format = "DD/MM/YYYY"
+                        display_text = cell.value.strftime("%d/%m/%Y")
+                    except ValueError:
+                        cell.value = raw_value
+                        display_text = raw_value
+                elif column.data_type == DynamicColumn.DataType.URL:
+                    hyperlink = normalize_text(record.metadata.get(column_slug, {}).get("hyperlink")) or raw_value
+                    cell.value = display_text
+                    if looks_like_url(hyperlink):
+                        cell.hyperlink = hyperlink
+                        cell.style = "Hyperlink"
+                else:
+                    cell.value = raw_value
+                    display_text = raw_value
+
+                column_widths[column_index] = max(column_widths[column_index], len(display_text))
+
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = f"A1:{get_column_letter(len(header_items))}1"
+        for column_index, width in column_widths.items():
+            worksheet.column_dimensions[get_column_letter(column_index)].width = min(max(width + 2, 10), 60)
+
+    return workbook
 
 
 def infer_progress(record: GroupedRecord) -> str:

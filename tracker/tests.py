@@ -1,4 +1,5 @@
 import json
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
@@ -6,6 +7,7 @@ from uuid import uuid4
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from openpyxl import load_workbook
 
 from .chat_handler import ChatHandler
 from .models import ChatModelConfig, DynamicColumn, DynamicTable, PortalJobSuggestion
@@ -327,3 +329,95 @@ class DynamicRecordServiceTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Computer Vision Scientist")
         self.assertContains(response, "Example Research Portal")
+
+    def test_dashboard_recent_submissions_show_submission_date(self):
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-05-02",
+                "role-title": "Vision PhD",
+                "url": "https://example.com/vision-phd",
+                "type": "PhD",
+                "application-progress": "Interview",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Submitted 02 May 2026")
+
+    def test_export_applications_downloads_user_tables_as_workbook(self):
+        follow_up = DynamicTable.objects.create(
+            owner=self.user,
+            name="Follow Up",
+            slug="follow-up",
+        )
+        DynamicColumn.objects.create(
+            table=follow_up,
+            name="Status Note",
+            slug="status-note",
+            data_type=DynamicColumn.DataType.TEXT,
+            position=1,
+        )
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-29",
+                "role-title": "Vision PhD",
+                "url": "https://example.com/vision-phd",
+                "name": "Example University",
+                "type": "PhD",
+                "application-progress": "Applied",
+            },
+        )
+        save_record(
+            self.portals,
+            self.user,
+            {
+                "url": "https://example.com/portal",
+                "name": "Example Portal",
+            },
+        )
+        save_record(
+            self.to_apply,
+            self.user,
+            {
+                "url": "https://example.com/to-apply",
+                "deadline": "2026-05-10",
+                "type": "Job",
+            },
+        )
+        save_record(
+            follow_up,
+            self.user,
+            {
+                "status-note": "Waiting for recruiter reply",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("export_applications"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.assertIn('filename="Applications.xlsx"', response["Content-Disposition"])
+
+        workbook = load_workbook(BytesIO(response.content))
+        self.assertEqual(workbook.sheetnames[:3], ["Applied", "Portals", "To Apply"])
+        self.assertIn("Follow Up", workbook.sheetnames)
+
+        applied_sheet = workbook["Applied"]
+        self.assertEqual(applied_sheet["B2"].value, "Vision PhD")
+        self.assertEqual(applied_sheet["B2"].hyperlink.target, "https://example.com/vision-phd")
+        self.assertEqual(applied_sheet["A2"].value.strftime("%d/%m/%Y"), "29/04/2026")
+
+        follow_up_sheet = workbook["Follow Up"]
+        self.assertEqual(follow_up_sheet["A1"].value, "Status Note")
+        self.assertEqual(follow_up_sheet["A2"].value, "Waiting for recruiter reply")

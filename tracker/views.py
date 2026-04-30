@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BytesIO
 import json
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +11,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import LoginView
-from django.http import Http404
+from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
@@ -31,6 +32,7 @@ from .email_verification import send_verification_email, verify_user_from_token
 from .models import DynamicTable, PortalJobSuggestion
 from .services import (
     add_portal_job_to_to_apply,
+    build_export_workbook,
     build_dashboard,
     count_records,
     dashboard_template_initial_values,
@@ -759,3 +761,23 @@ def delete_workspace_record(request, table_slug, row_key):
         delete_record(get_user_table(request.user, table_slug), request.user, row_key)
         messages.success(request, "Record deleted.")
     return redirect("workspace_table", table_slug)
+
+
+@login_required
+def export_applications(request):
+    workbook_path = Path(settings.BASE_DIR) / "Applications.xlsx"
+    ensure_user_workspace(request.user, workbook_path if workbook_path.exists() else None)
+    workbook = build_export_workbook(
+        request.user,
+        template_path=workbook_path if workbook_path.exists() else None,
+    )
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+
+    response = HttpResponse(
+        output.getvalue(),
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    response["Content-Disposition"] = 'attachment; filename="Applications.xlsx"'
+    return response

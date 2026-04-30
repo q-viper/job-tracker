@@ -38,6 +38,7 @@ from .views import (
     WorkspaceRecordUpdateView,
     WorkspaceTableView,
     delete_applied,
+    export_applications,
     delete_to_apply,
     delete_workspace_record,
 )
@@ -48,6 +49,7 @@ urlpatterns = [
     path("signup/", SignupView.as_view(), name="signup"),
     path("verify-email/<uidb64>/<token>/", VerifyEmailView.as_view(), name="verify_email"),
     path("logout/", LogoutView.as_view(), name="logout"),
+    path("export/applications.xlsx", export_applications, name="export_applications"),
     path("settings/", AccountSettingsView.as_view(), name="account_settings"),
     path("to-apply/", ToApplyListView.as_view(), name="to_apply_list"),
     path("to-apply/new/", ToApplyCreateView.as_view(), name="to_apply_create"),

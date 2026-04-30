@@ -58,6 +58,7 @@
                         </button>
                     </div>
                     <div class="mt-4 flex flex-wrap gap-3 text-sm">
+                        <a class="rounded-full bg-white/10 px-4 py-2 transition hover:bg-white/20" href="{% url 'export_applications' %}">Export XLSX</a>
                         <a class="rounded-full bg-white/10 px-4 py-2 transition hover:bg-white/20" href="{% url 'manage_tables' %}">Manage Tables</a>
                         <a class="rounded-full bg-white/10 px-4 py-2 transition hover:bg-white/20" href="{% url 'account_settings' %}">Settings</a>
                         {% if request.user.is_staff %}
@@ -105,16 +106,13 @@
     </div>
 
     {% if request.user.is_authenticated %}
-        <div class="fixed bottom-4 right-4 z-50 w-[calc(100vw-1.5rem)] max-w-xl">
-            <div id="quassi-shell" class="overflow-hidden rounded-[1.8rem] border border-white/80 bg-white/92 shadow-2xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/92">
-                <button id="quassi-toggle" type="button" class="flex w-full items-center justify-between gap-4 bg-slate-950 px-5 py-4 text-left text-white dark:bg-sky-500 dark:text-slate-950">
-                    <span>
-                        <span class="block text-sm font-semibold">Quassi</span>
-                        <span class="mt-1 block text-xs text-slate-300 dark:text-slate-950/80">Ask about jobs, upload a CV, or add matches into To Apply.</span>
-                    </span>
-                    <span id="quassi-toggle-icon" class="text-lg font-semibold">+</span>
-                </button>
-                <div id="quassi-panel" class="hidden h-[min(78vh,46rem)] min-h-0 flex-col overflow-hidden">
+        <div class="fixed bottom-4 right-4 z-50">
+            <div id="quassi-shell" class="relative">
+                <div id="quassi-panel" class="absolute bottom-16 right-0 hidden h-[min(78vh,46rem)] min-h-0 w-[calc(100vw-1.5rem)] max-w-[28rem] flex-col overflow-hidden rounded-[1.8rem] border border-white/80 bg-white/92 shadow-2xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/92">
+                    <div class="border-b border-slate-200/80 bg-slate-950 px-4 py-4 text-white dark:border-slate-700 dark:bg-sky-500 dark:text-slate-950">
+                        <p class="text-sm font-semibold">Quassi</p>
+                        <p class="mt-1 text-xs text-slate-300 dark:text-slate-950/80">Ask about jobs, upload a CV, or add matches into To Apply.</p>
+                    </div>
                     <form id="quassi-csrf-form" class="hidden">{% csrf_token %}</form>
                     <div class="border-b border-slate-200/80 px-4 py-4 dark:border-slate-700">
                         <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Quick Templates</p>
@@ -150,6 +148,10 @@
                         </div>
                     </div>
                 </div>
+                <button id="quassi-toggle" type="button" class="flex h-14 w-14 items-center justify-center rounded-full bg-slate-950 text-white shadow-2xl transition hover:scale-[1.02] hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-300 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400" aria-label="Open Quassi">
+                    <span class="sr-only">Toggle Quassi</span>
+                    <span id="quassi-toggle-icon" aria-hidden="true"></span>
+                </button>
             </div>
         </div>
 
@@ -190,9 +192,17 @@
             const quassiClear = document.getElementById("quassi-clear");
             let quassiHistory = JSON.parse(document.getElementById("quassi-history-data").textContent);
             const quassiModels = JSON.parse(document.getElementById("quassi-models-data").textContent);
+            const quassiClosedIcon = '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M8.625 10.5h6.75m-6.75 3h4.5m-6.375 6.75h10.5A2.25 2.25 0 0 0 19.5 18V8.379a2.25 2.25 0 0 0-.659-1.591l-2.629-2.629a2.25 2.25 0 0 0-1.591-.659H6.75A2.25 2.25 0 0 0 4.5 5.75V18A2.25 2.25 0 0 0 6.75 20.25Z" /></svg>';
+            const quassiOpenIcon = '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>';
 
             function getCsrfToken() {
                 return document.querySelector("#quassi-csrf-form input[name=csrfmiddlewaretoken]").value;
+            }
+
+            function syncQuassiToggleState() {
+                const isOpen = !quassiPanel.classList.contains("hidden");
+                quassiToggleIcon.innerHTML = isOpen ? quassiOpenIcon : quassiClosedIcon;
+                quassiToggle.setAttribute("aria-label", isOpen ? "Close Quassi" : "Open Quassi");
             }
 
             function confirmDestructiveAction(target) {
@@ -391,7 +401,7 @@
             quassiToggle.addEventListener("click", () => {
                 quassiPanel.classList.toggle("hidden");
                 quassiPanel.classList.toggle("flex");
-                quassiToggleIcon.textContent = quassiPanel.classList.contains("hidden") ? "+" : "-";
+                syncQuassiToggleState();
                 if (!quassiPanel.classList.contains("hidden")) {
                     scrollQuassiToBottom();
                 }
@@ -418,6 +428,7 @@
             }
 
             renderHistory();
+            syncQuassiToggleState();
             scrollQuassiToBottom();
         </script>
     {% endif %}
