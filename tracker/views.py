@@ -13,6 +13,7 @@ from django.contrib.auth.views import LoginView
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils import timezone
 from django.views import View
 from django.views.generic import FormView, TemplateView
@@ -193,21 +194,26 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
             if table.slug == "to-apply":
                 edit_url = reverse("to_apply_edit", args=[record.row_key])
                 delete_url = reverse("to_apply_delete", args=[record.row_key])
+                promote_url = reverse("to_apply_promote", args=[record.row_key])
             elif table.slug == "applied":
                 edit_url = reverse("applied_edit", args=[record.row_key])
                 delete_url = reverse("applied_delete", args=[record.row_key])
+                promote_url = ""
             elif table.slug == "portals":
                 edit_url = reverse("workspace_record_edit", args=[table.slug, record.row_key])
                 delete_url = reverse("workspace_record_delete", args=[table.slug, record.row_key])
+                promote_url = ""
             else:
                 edit_url = reverse("workspace_record_edit", args=[table.slug, record.row_key])
                 delete_url = reverse("workspace_record_delete", args=[table.slug, record.row_key])
+                promote_url = ""
             primary_cells, secondary_cells = self.split_cells(table, record)
             rows.append(
                 {
                     "record": record,
                     "edit_url": edit_url,
                     "delete_url": delete_url,
+                    "promote_url": promote_url,
                     "jobs_url": reverse("portal_jobs", args=[record.row_key]) if table.slug == "portals" else "",
                     "primary_cells": primary_cells,
                     "secondary_cells": secondary_cells,
@@ -757,6 +763,31 @@ class AddPortalJobToApplyView(LoginRequiredMixin, WorkspaceReadyMixin, View):
         if redirect_to:
             return redirect(redirect_to)
         return redirect("portal_jobs", suggestion.portal_row_key)
+
+
+@login_required
+def promote_to_applied(request, row_key):
+    redirect_to = (request.POST.get("next") or "").strip()
+    if request.method == "POST":
+        try:
+            move_to_applied(
+                user=request.user,
+                applied_table=get_user_table(request.user, "applied"),
+                to_apply_table=get_user_table(request.user, "to-apply"),
+                values={},
+                source_row_key=row_key,
+            )
+            messages.success(request, "Job moved to Applied.")
+        except ValueError as exc:
+            messages.error(request, str(exc))
+
+    if redirect_to and url_has_allowed_host_and_scheme(
+        url=redirect_to,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return redirect(redirect_to)
+    return redirect("to_apply_list")
 
 
 @login_required

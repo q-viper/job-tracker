@@ -148,6 +148,48 @@ class DynamicRecordServiceTests(TestCase):
         self.assertEqual(applied_records[0].values["role-title"], "Vision PhD")
         self.assertEqual(applied_records[0].values["application-progress"], "Applied")
 
+    def test_to_apply_list_shows_move_to_applied_button(self):
+        source_row_key = save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Vision PhD",
+                "url": "https://example.com/phd",
+                "type": "PhD",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("to_apply_list"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Move to Applied")
+        self.assertContains(response, reverse("to_apply_promote", args=[source_row_key]))
+
+    def test_promote_to_applied_view_moves_record_and_redirects_back(self):
+        source_row_key = save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Vision PhD",
+                "url": "https://example.com/phd",
+                "type": "PhD",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("to_apply_promote", args=[source_row_key]),
+            data={"next": "/to-apply/?view=table"},
+        )
+
+        self.assertRedirects(response, "/to-apply/?view=table")
+        self.assertEqual(len(get_records(self.to_apply, self.user)), 0)
+        applied_records = get_records(self.applied, self.user)
+        self.assertEqual(len(applied_records), 1)
+        self.assertEqual(applied_records[0].values["role-title"], "Vision PhD")
+        self.assertEqual(applied_records[0].values["application-progress"], "Applied")
+
     def test_rag_returns_matching_records_from_user_tables(self):
         save_record(
             self.to_apply,
