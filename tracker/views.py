@@ -203,6 +203,10 @@ class DashboardView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
         context["dashboard_widgets_json"] = json.dumps(
             [serialize_dashboard_widget(widget) for widget in dashboard_payload["selected_homepage_widgets"]]
         )
+        context["dashboard_secondary_panels"] = [
+            *dashboard_payload["dashboard_panel_layout"]["left"],
+            *dashboard_payload["dashboard_panel_layout"]["right"],
+        ]
         context["dashboard_templates"] = [
             {
                 **item,

@@ -589,7 +589,7 @@ class DynamicRecordServiceTests(TestCase):
 
         homepage = self.client.get(reverse("dashboard"))
         self.assertNotContains(homepage, "Drag cards by the dotted handle")
-        self.assertContains(homepage, "A cleaner home for the dashboards you saved")
+        self.assertContains(homepage, "A calmer view of your job search momentum")
 
     def test_dashboard_board_item_api_can_add_update_and_remove_widget_layout(self):
         ensure_user_workspace(self.user)

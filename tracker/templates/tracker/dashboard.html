@@ -5,10 +5,175 @@
 
 {% block content %}
     <style>
+        .dashboard-shell {
+            display: grid;
+            gap: 1.5rem;
+            align-items: start;
+            min-width: 0;
+        }
+
+        @media (min-width: 1440px) {
+            .dashboard-shell {
+                grid-template-columns: minmax(0, 1fr) 20rem;
+            }
+        }
+
+        @media (min-width: 1680px) {
+            .dashboard-shell {
+                grid-template-columns: minmax(0, 1.15fr) 22rem;
+            }
+        }
+
+        .dashboard-main-column,
+        .dashboard-side-column {
+            display: grid;
+            gap: 1.25rem;
+            min-width: 0;
+            width: 100%;
+        }
+
+        .dashboard-side-column {
+            align-content: start;
+        }
+
+        @media (min-width: 1440px) {
+            .dashboard-side-column {
+                position: sticky;
+                top: 8rem;
+            }
+        }
+
+        .dashboard-collapsible {
+            border-radius: 2rem;
+            border: 1px solid rgb(226 232 240);
+            background: white;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        .dark .dashboard-collapsible {
+            border-color: rgb(30 41 59);
+            background: rgb(15 23 42);
+        }
+
+        .dashboard-collapsible > summary {
+            display: flex;
+            cursor: pointer;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            list-style: none;
+            padding: 1rem 1.2rem;
+            min-width: 0;
+        }
+
+        .dashboard-collapsible > summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .dashboard-collapsible > summary > div {
+            min-width: 0;
+        }
+
+        .dashboard-collapsible__chevron {
+            display: inline-flex;
+            height: 2rem;
+            width: 2rem;
+            align-items: center;
+            justify-content: center;
+            border-radius: 9999px;
+            background: rgb(241 245 249);
+            color: rgb(71 85 105);
+            transition: transform 160ms ease, background-color 160ms ease;
+        }
+
+        .dark .dashboard-collapsible__chevron {
+            background: rgb(30 41 59);
+            color: rgb(226 232 240);
+        }
+
+        .dashboard-collapsible[open] .dashboard-collapsible__chevron {
+            transform: rotate(180deg);
+        }
+
+        .dashboard-collapsible__content {
+            padding: 0 1.2rem 1.2rem;
+        }
+
+        .dashboard-compact-list {
+            display: grid;
+            gap: 0.75rem;
+            min-width: 0;
+        }
+
+        .dashboard-compact-item {
+            border-radius: 1.25rem;
+            border: 1px solid rgb(226 232 240);
+            background: rgb(248 250 252);
+            padding: 0.9rem 1rem;
+            min-width: 0;
+        }
+
+        .dark .dashboard-compact-item {
+            border-color: rgb(30 41 59);
+            background: rgba(2, 6, 23, 0.5);
+        }
+
+        .dashboard-metric-card {
+            border-radius: 1.5rem;
+            border: 1px solid rgb(226 232 240);
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 252, 0.98));
+            padding: 1rem 1.1rem;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+            min-width: 0;
+        }
+
+        .dark .dashboard-metric-card {
+            border-color: rgb(30 41 59);
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.92));
+        }
+
+        .dashboard-topbar {
+            border-radius: 2rem;
+            border: 1px solid rgb(226 232 240);
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.92));
+            padding: 1.35rem;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        @media (max-width: 639px) {
+            .dashboard-topbar {
+                padding: 1rem;
+            }
+        }
+
+        .dark .dashboard-topbar {
+            border-color: rgb(30 41 59);
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.92));
+        }
+
+        .dashboard-side-heading {
+            font-family: "IBM Plex Mono", ui-monospace, monospace;
+            font-size: 0.72rem;
+            letter-spacing: 0.22em;
+            text-transform: uppercase;
+            color: rgb(14 165 233);
+        }
+
         #dashboard-widget-grid {
             display: grid;
             gap: 1.75rem;
             grid-template-columns: minmax(0, 1fr);
+            min-width: 0;
+        }
+
+        @media (min-width: 768px) and (max-width: 1279px) {
+            #dashboard-widget-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
         }
 
         @media (min-width: 1280px) {
@@ -20,6 +185,14 @@
         .dashboard-widget-card {
             grid-column: span 12 / span 12;
             transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        @media (min-width: 768px) and (max-width: 1279px) {
+            .dashboard-widget-card {
+                grid-column: span 2 / span 2;
+            }
         }
 
         @media (min-width: 1280px) {
@@ -37,6 +210,24 @@
         .dashboard-plot-surface {
             height: var(--widget-height, 360px);
             min-height: 280px;
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+            overflow: hidden;
+        }
+
+        @media (max-width: 639px) {
+            .dashboard-plot-surface {
+                min-height: 220px;
+            }
+        }
+
+        .dashboard-plot-surface canvas,
+        .dashboard-plot-surface .js-plotly-plot,
+        .dashboard-plot-surface .plot-container,
+        .dashboard-plot-surface .svg-container {
+            width: 100% !important;
+            max-width: 100% !important;
         }
 
         .dashboard-widget-header {
@@ -49,24 +240,29 @@
                 "source"
                 "actions";
             align-items: start;
+            min-width: 0;
         }
 
         .dashboard-widget-meta {
             grid-area: meta;
+            min-width: 0;
         }
 
         .dashboard-widget-title {
             grid-area: title;
+            min-width: 0;
         }
 
         .dashboard-widget-source {
             grid-area: source;
+            min-width: 0;
         }
 
         .dashboard-widget-actions {
             grid-area: actions;
             justify-self: start;
             width: 100%;
+            min-width: 0;
         }
 
         @media (min-width: 1280px) {
@@ -86,30 +282,20 @@
         }
     </style>
 
-    <section class="grid gap-6 xl:grid-cols-[19rem_minmax(0,1.2fr)_22rem] 2xl:grid-cols-[20rem_minmax(0,1.45fr)_24rem] xl:items-start">
-        <aside class="order-2 space-y-6 xl:order-1 xl:sticky xl:top-32">
-            {% for panel in dashboard_panel_layout.left %}
-                {% include "tracker/dashboard_panel_card.html" %}
-            {% empty %}
-                <article class="rounded-[2rem] border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-                    Left rail panels are hidden. Use <a href="{{ dashboard_customize_url }}" class="font-semibold text-sky-700 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200">Customize layout</a> to bring them back.
-                </article>
-            {% endfor %}
-        </aside>
-
-        <div class="order-1 space-y-6 xl:order-2">
-            <article class="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <section class="dashboard-shell">
+        <div class="dashboard-main-column">
+            <article class="dashboard-topbar">
                 <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                     <div>
                         <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Homepage</p>
-                        <h2 class="mt-2 text-3xl font-bold tracking-tight">A cleaner home for the dashboards you saved</h2>
-                        <p class="mt-3 max-w-4xl text-sm text-slate-600 dark:text-slate-300">
-                            Pick a saved board, scan the latest plots, and jump into the designer only when you want to rearrange things.
+                        <h2 class="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">A calmer view of your job search momentum</h2>
+                        <p class="mt-2 max-w-4xl text-sm text-slate-600 dark:text-slate-300">
+                            Your saved board stays front and center here, while supporting lists and shortcuts live in a lighter side rail.
                         </p>
                         {% if homepage_boards %}
                             <div class="mt-4 flex flex-wrap gap-2">
                                 {% for board in homepage_boards %}
-                                    <a href="{% url 'dashboard' %}?board={{ board.id }}" class="rounded-full px-4 py-2 text-sm font-medium transition {% if selected_homepage_board and selected_homepage_board.id == board.id %}bg-slate-950 text-white dark:bg-sky-500 dark:text-slate-950{% else %}bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700{% endif %}">
+                                    <a href="{% url 'dashboard' %}?board={{ board.id }}" class="rounded-full px-4 py-2 text-sm font-medium transition {% if selected_homepage_board and selected_homepage_board.id == board.id %}bg-slate-950 text-white shadow-sm dark:bg-sky-500 dark:text-slate-950{% else %}bg-white/90 text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700{% endif %}">
                                         {{ board.name }}
                                     </a>
                                 {% endfor %}
@@ -119,12 +305,12 @@
                             </div>
                         {% endif %}
                     </div>
-                    <div class="flex flex-wrap gap-3">
+                    <div class="flex flex-wrap gap-2">
                         {% if dashboard_designer_url %}
-                            <a href="{{ dashboard_designer_url }}" class="rounded-full bg-emerald-100 px-4 py-3 text-sm font-medium text-emerald-900 transition hover:bg-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-200 dark:hover:bg-emerald-500/30">Open designer</a>
+                            <a href="{{ dashboard_designer_url }}" class="rounded-full bg-emerald-100 px-4 py-2.5 text-sm font-medium text-emerald-900 transition hover:bg-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-200 dark:hover:bg-emerald-500/30">Open designer</a>
                         {% endif %}
-                        <a href="{{ dashboard_boards_url }}" class="rounded-full bg-white px-4 py-3 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Dashboard library</a>
-                        <a href="{{ dashboard_customize_url }}" class="rounded-full bg-amber-100 px-4 py-3 text-sm font-medium text-amber-900 transition hover:bg-amber-200 dark:bg-amber-500/20 dark:text-amber-200 dark:hover:bg-amber-500/30">Customize rails</a>
+                        <a href="{{ dashboard_boards_url }}" class="rounded-full bg-white px-4 py-2.5 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Dashboard library</a>
+                        <a href="{{ dashboard_customize_url }}" class="rounded-full bg-amber-100 px-4 py-2.5 text-sm font-medium text-amber-900 transition hover:bg-amber-200 dark:bg-amber-500/20 dark:text-amber-200 dark:hover:bg-amber-500/30">Customize rails</a>
                     </div>
                 </div>
             </article>
@@ -138,12 +324,18 @@
             {% endfor %}
         </div>
 
-        <aside class="order-3 space-y-6 xl:sticky xl:top-32">
-            {% for panel in dashboard_panel_layout.right %}
+        <aside class="dashboard-side-column">
+            <article class="rounded-[2rem] border border-slate-200 bg-white px-5 py-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <p class="dashboard-side-heading">Workspace Rail</p>
+                <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                    Secondary context lives here so the main board stays easier to scan.
+                </p>
+            </article>
+            {% for panel in dashboard_secondary_panels %}
                 {% include "tracker/dashboard_panel_card.html" %}
             {% empty %}
                 <article class="rounded-[2rem] border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-                    Right rail panels are hidden. Use <a href="{{ dashboard_customize_url }}" class="font-semibold text-sky-700 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200">Customize layout</a> to change that.
+                    Side rail panels are hidden. Use <a href="{{ dashboard_customize_url }}" class="font-semibold text-sky-700 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200">Customize layout</a> to bring them back.
                 </article>
             {% endfor %}
         </aside>
