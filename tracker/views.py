@@ -53,7 +53,7 @@ from .services import (
     save_record,
     sort_records_with_field,
 )
-from .notifications import build_email_body, upcoming_deadlines_for_user
+from .notifications import build_email_body, send_notification_to_user, upcoming_deadlines_for_user
 from .smtp_handler import SMTPHandler
 
 
@@ -613,6 +613,7 @@ class AccountSettingsView(LoginRequiredMixin, WorkspaceReadyMixin, FormView):
         context["nav_section"] = "settings"
         context["smtp_configured"] = SMTPHandler.is_configured()
         context["notification_preview"] = kwargs.get("notification_preview", "")
+        context["last_notification_sent_at"] = self.request.user.last_notification_sent_at
         return context
 
     def get_success_url(self):
@@ -627,6 +628,26 @@ class AccountSettingsView(LoginRequiredMixin, WorkspaceReadyMixin, FormView):
                     user.notification_email = user.email
                 preview_body = build_email_body(user, upcoming_deadlines_for_user(user), [])
                 return self.render_to_response(self.get_context_data(form=form, notification_preview=preview_body))
+            return self.render_to_response(self.get_context_data(form=form))
+        if "send_notification_now" in request.POST:
+            if not SMTPHandler.is_configured():
+                messages.error(request, "SMTP is not configured yet, so the notification email cannot be sent.")
+                return self.render_to_response(self.get_context_data(form=form))
+            if form.is_valid():
+                user = form.save(commit=False)
+                if not user.notification_email:
+                    user.notification_email = user.email
+                user.save()
+                try:
+                    result = send_notification_to_user(user, force=True, dry_run=False)
+                except Exception as exc:
+                    messages.error(request, f"Could not send the notification email right now: {exc}")
+                    return redirect(self.get_success_url())
+                messages.success(
+                    request,
+                    f"Notification email sent to {result['recipient']}.",
+                )
+                return redirect(self.get_success_url())
             return self.render_to_response(self.get_context_data(form=form))
         if form.is_valid():
             return self.form_valid(form)

@@ -12,9 +12,24 @@ from openpyxl import Workbook, load_workbook
 
 from .chat_handler import ChatHandler
 from .models import ChatModelConfig, DynamicColumn, DynamicTable, PortalJobSuggestion
+from .notifications import run_notifications
 from .rag import chat_with_rag
 from .services import aggregate_records, get_records, move_to_applied, save_record
 from .views import ToApplyListView
+
+
+class DummySMTPContext:
+    def __init__(self):
+        self.sent_messages: list[tuple[str, str, str]] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+    def send_email(self, recipient: str, subject: str, body: str) -> None:
+        self.sent_messages.append((recipient, subject, body))
 
 
 class DynamicRecordServiceTests(TestCase):
@@ -660,3 +675,62 @@ class DynamicRecordServiceTests(TestCase):
         self.assertEqual(len(portal_records), 1)
         self.assertEqual(applied_records[0].values["url"], "https://example.com/imported-applied")
         self.assertEqual(to_apply_records[0].values["url"], "https://example.com/imported-to-apply")
+
+
+class NotificationWorkflowTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="notifier",
+            email="notifier@example.com",
+            password="TestPassword123!",
+        )
+        self.user.notification_email = "notifier@example.com"
+        self.user.notify_enabled = True
+        self.user.auto_fetch_portals = True
+        self.user.save()
+
+    def test_run_notifications_sends_daily_summary_even_without_new_items(self):
+        smtp_context = DummySMTPContext()
+
+        with (
+            patch("tracker.notifications.SMTPHandler.is_configured", return_value=True),
+            patch("tracker.notifications.SMTPHandler.from_env", return_value=smtp_context),
+            patch("tracker.notifications.refresh_portals_for_user", return_value=[]),
+        ):
+            processed = run_notifications(force=False, dry_run=False)
+
+        self.user.refresh_from_db()
+        self.assertEqual(processed, 1)
+        self.assertEqual(len(smtp_context.sent_messages), 1)
+        recipient, subject, body = smtp_context.sent_messages[0]
+        self.assertEqual(recipient, "notifier@example.com")
+        self.assertIn("Job Tracker Update", subject)
+        self.assertIn("No upcoming deadlines were found", body)
+        self.assertIn("No new portal matches were found", body)
+        self.assertIsNotNone(self.user.last_notification_sent_at)
+
+    def test_account_settings_send_notification_now_uses_manual_send_path(self):
+        self.client.force_login(self.user)
+
+        with (
+            patch("tracker.views.SMTPHandler.is_configured", return_value=True),
+            patch("tracker.views.send_notification_to_user", return_value={"sent": True, "recipient": "notifier@example.com"}) as send_mock,
+        ):
+            response = self.client.post(
+                reverse("account_settings"),
+                data={
+                    "notification_email": "notifier@example.com",
+                    "notify_enabled": "on",
+                    "notify_time": "08:00",
+                    "auto_fetch_portals": "on",
+                    "deadline_notification_window_days": "7",
+                    "chat_history_retention_days": "1",
+                    "send_notification_now": "1",
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        send_mock.assert_called_once()
+        _, kwargs = send_mock.call_args
+        self.assertEqual(kwargs["force"], True)
+        self.assertEqual(kwargs["dry_run"], False)
