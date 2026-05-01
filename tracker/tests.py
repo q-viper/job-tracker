@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
+import requests
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
@@ -14,7 +15,7 @@ from .chat_handler import ChatHandler
 from .models import ChatModelConfig, DynamicColumn, DynamicTable, PortalJobSuggestion
 from .notifications import run_notifications
 from .rag import chat_with_rag
-from .services import aggregate_records, get_records, move_to_applied, save_record
+from .services import aggregate_records, get_records, move_to_applied, save_record, scrape_jobs_from_portal
 from .views import ToApplyListView
 
 
@@ -512,6 +513,152 @@ class DynamicRecordServiceTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Computer Vision Scientist")
         self.assertContains(response, "Example Research Portal")
+
+    def test_scrape_jobs_from_portal_falls_back_to_selenium_after_403(self):
+        blocked_error = requests.HTTPError("403 Client Error: Forbidden for url")
+        blocked_error.response = SimpleNamespace(status_code=403)
+        browser_html = """
+        <html>
+            <body>
+                <a href="/careers/cv-scientist">Computer Vision Scientist</a>
+            </body>
+        </html>
+        """
+
+        with (
+            patch("tracker.services.portal_fetch_mode", return_value="auto"),
+            patch("tracker.services.safe_get_url", side_effect=blocked_error),
+            patch("tracker.services.fetch_portal_html_in_browser", return_value=browser_html) as browser_fetch,
+        ):
+            jobs = scrape_jobs_from_portal("https://example.com/careers", ["vision"])
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["title"], "Computer Vision Scientist")
+        self.assertEqual(jobs[0]["url"], "https://example.com/careers/cv-scientist")
+        browser_fetch.assert_called_once()
+
+    def test_scrape_jobs_from_portal_falls_back_to_selenium_after_ssl_handshake_failure(self):
+        ssl_error = requests.exceptions.SSLError(
+            "[SSL: SSLV3_ALERT_HANDSHAKE_FAILURE] sslv3 alert handshake failure (_ssl.c:1000)"
+        )
+        browser_html = """
+        <html>
+            <body>
+                <a href="/stellen/research-assistant">Research Assistant Computer Vision</a>
+            </body>
+        </html>
+        """
+
+        with (
+            patch("tracker.services.portal_fetch_mode", return_value="auto"),
+            patch("tracker.services.safe_get_url", side_effect=ssl_error),
+            patch("tracker.services.fetch_portal_html_in_browser", return_value=browser_html) as browser_fetch,
+        ):
+            jobs = scrape_jobs_from_portal("https://adb.zuv.uni-heidelberg.de/info/INFO_LS$.Startup", ["vision"])
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["title"], "Research Assistant Computer Vision")
+        self.assertEqual(
+            jobs[0]["url"],
+            "https://adb.zuv.uni-heidelberg.de/stellen/research-assistant",
+        )
+        browser_fetch.assert_called_once()
+
+    def test_scrape_jobs_from_portal_retries_with_selenium_for_javascript_pages(self):
+        static_response = SimpleNamespace(text="<html><body><div id='app-root'></div></body></html>")
+        browser_html = """
+        <html>
+            <body>
+                <a href="/jobs/ml-researcher">Machine Learning Researcher</a>
+            </body>
+        </html>
+        """
+
+        with (
+            patch("tracker.services.portal_fetch_mode", return_value="auto"),
+            patch("tracker.services.safe_get_url", return_value=static_response),
+            patch("tracker.services.fetch_portal_html_in_browser", return_value=browser_html) as browser_fetch,
+        ):
+            jobs = scrape_jobs_from_portal("https://example.com/portal", ["researcher"])
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["title"], "Machine Learning Researcher")
+        self.assertEqual(jobs[0]["url"], "https://example.com/jobs/ml-researcher")
+        browser_fetch.assert_called_once()
+
+    def test_scrape_jobs_from_portal_filters_keywords_by_words_not_substrings(self):
+        html = """
+        <html>
+            <body>
+                <div>
+                    <a href="/jobs/physics-chair">Research Chair in Physics</a>
+                </div>
+                <div>
+                    <a href="/jobs/ai-researcher">AI Research Engineer</a>
+                </div>
+            </body>
+        </html>
+        """
+
+        with patch("tracker.services.safe_get_url", return_value=SimpleNamespace(text=html)):
+            jobs = scrape_jobs_from_portal("https://example.com/careers", ["AI"])
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["title"], "AI Research Engineer")
+        self.assertEqual(jobs[0]["url"], "https://example.com/jobs/ai-researcher")
+
+    def test_scrape_jobs_from_portal_matches_keywords_from_summary_text(self):
+        html = """
+        <html>
+            <body>
+                <div>
+                    <a href="/jobs/open-position">Open Position</a>
+                    <span>Computer-Vision Laboratory and robotics team</span>
+                </div>
+            </body>
+        </html>
+        """
+
+        with patch("tracker.services.safe_get_url", return_value=SimpleNamespace(text=html)):
+            jobs = scrape_jobs_from_portal("https://example.com/careers", ["computer vision"])
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["title"], "Open Position")
+        self.assertIn("Computer-Vision Laboratory", jobs[0]["summary"])
+
+    def test_scrape_jobs_from_portal_matches_plural_forms_of_keywords(self):
+        html = """
+        <html>
+            <body>
+                <div>
+                    <a href="/jobs/applied-scientists">Applied Scientists</a>
+                </div>
+            </body>
+        </html>
+        """
+
+        with patch("tracker.services.safe_get_url", return_value=SimpleNamespace(text=html)):
+            jobs = scrape_jobs_from_portal("https://example.com/careers", ["scientist"])
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["title"], "Applied Scientists")
+
+    def test_scrape_jobs_from_portal_supports_combined_keyword_entries(self):
+        html = """
+        <html>
+            <body>
+                <div>
+                    <a href="/jobs/ml-engineer">ML Engineer</a>
+                </div>
+            </body>
+        </html>
+        """
+
+        with patch("tracker.services.safe_get_url", return_value=SimpleNamespace(text=html)):
+            jobs = scrape_jobs_from_portal("https://example.com/careers", ["AI/ML"])
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["title"], "ML Engineer")
 
     def test_dashboard_recent_submissions_show_submission_date(self):
         save_record(

@@ -4,7 +4,9 @@ import ipaddress
 import json
 import os
 import re
+import shutil
 import socket
+import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -80,6 +82,51 @@ PORTAL_NEGATIVE_KEYWORDS = (
     "register",
     "subscribe",
     "newsletter",
+)
+
+PORTAL_BROWSER_REQUIRED_MARKERS = (
+    "access denied",
+    "forbidden",
+    "verify you are human",
+    "please enable javascript",
+    "javascript is required",
+    "checking your browser",
+    "captcha",
+    "cloudflare",
+)
+
+PORTAL_BROWSER_BINARY_CANDIDATES = {
+    "edge": (
+        "msedge",
+        "microsoft-edge",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "/usr/bin/microsoft-edge",
+        "/usr/bin/microsoft-edge-stable",
+    ),
+    "chrome": (
+        "chrome",
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium",
+        "chromium-browser",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+    ),
+}
+
+PORTAL_FETCH_MODES = {"auto", "requests", "browser"}
+PORTAL_BROWSER_NAMES = ("edge", "chrome")
+
+DEFAULT_HTTP_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
 CHART_TYPE_CHOICES = (
@@ -570,6 +617,53 @@ def default_portal_keywords_text() -> str:
     return ", ".join(DEFAULT_PORTAL_KEYWORDS)
 
 
+def normalize_search_text(value: Any) -> str:
+    text = normalize_text(value)
+    if not text:
+        return ""
+    ascii_text = unicodedata.normalize("NFKD", text)
+    ascii_text = "".join(character for character in ascii_text if not unicodedata.combining(character))
+    ascii_text = re.sub(r"[^0-9a-zA-Z]+", " ", ascii_text.lower())
+    return re.sub(r"\s+", " ", ascii_text).strip()
+
+
+def normalized_keyword_variants(keyword: str) -> list[str]:
+    normalized_keyword = normalize_search_text(keyword)
+    if not normalized_keyword:
+        return []
+    variants = [normalized_keyword]
+    raw_parts = [normalize_search_text(part) for part in re.split(r"[\/|&]+", normalize_text(keyword))]
+    variants.extend(part for part in raw_parts if part)
+    if " " not in normalized_keyword and len(normalized_keyword) >= 3:
+        if not normalized_keyword.endswith("s"):
+            variants.append(f"{normalized_keyword}s")
+            variants.append(f"{normalized_keyword}es")
+        if normalized_keyword.endswith("y") and len(normalized_keyword) > 1:
+            variants.append(f"{normalized_keyword[:-1]}ies")
+    expanded_variants: list[str] = []
+    for variant in variants:
+        expanded_variants.append(variant)
+        if " " not in variant and len(variant) >= 3:
+            if not variant.endswith("s"):
+                expanded_variants.append(f"{variant}s")
+                expanded_variants.append(f"{variant}es")
+            if variant.endswith("y") and len(variant) > 1:
+                expanded_variants.append(f"{variant[:-1]}ies")
+    return list(dict.fromkeys(expanded_variants))
+
+
+def matches_normalized_keyword(normalized_text: str, keyword: str) -> bool:
+    if not normalized_text:
+        return False
+    padded_text = f" {normalized_text} "
+    return any(f" {variant} " in padded_text for variant in normalized_keyword_variants(keyword))
+
+
+def matches_any_keyword(text: str, keywords: list[str] | tuple[str, ...]) -> bool:
+    normalized_text = normalize_search_text(text)
+    return any(matches_normalized_keyword(normalized_text, keyword) for keyword in keywords)
+
+
 def semantic_hex(value: str, *, alpha: float | None = None) -> str:
     normalized = normalize_text(value).lower()
     color = "#64748b"
@@ -654,14 +748,165 @@ def safe_get_url(url: str, timeout: int = 15) -> requests.Response:
         url,
         timeout=timeout,
         headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-            )
+            "User-Agent": DEFAULT_HTTP_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Upgrade-Insecure-Requests": "1",
         },
     )
     response.raise_for_status()
     return response
+
+
+def env_flag(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        return max(int(os.getenv(name, str(default))), minimum)
+    except (TypeError, ValueError):
+        return default
+
+
+def portal_fetch_mode() -> str:
+    configured = (os.getenv("PORTAL_FETCH_MODE", "auto") or "auto").strip().lower()
+    return configured if configured in PORTAL_FETCH_MODES else "auto"
+
+
+def portal_browser_name() -> str:
+    configured = (os.getenv("PORTAL_BROWSER", "auto") or "auto").strip().lower()
+    return configured if configured == "auto" or configured in PORTAL_BROWSER_NAMES else "auto"
+
+
+def portal_browser_headless() -> bool:
+    return env_flag("PORTAL_BROWSER_HEADLESS", True)
+
+
+def portal_browser_verbose_logs() -> bool:
+    return env_flag("PORTAL_BROWSER_VERBOSE_LOGS", False)
+
+
+def portal_browser_timeout_seconds() -> int:
+    return env_int("PORTAL_BROWSER_TIMEOUT_SECONDS", 30, minimum=5)
+
+
+def find_portal_browser_binary(browser_name: str) -> str | None:
+    override = (os.getenv("PORTAL_BROWSER_BINARY", "") or "").strip()
+    if override:
+        return override
+    for candidate in PORTAL_BROWSER_BINARY_CANDIDATES.get(browser_name, ()):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+        if Path(candidate).exists():
+            return str(Path(candidate))
+    return None
+
+
+def portal_browser_candidates() -> list[str]:
+    configured = portal_browser_name()
+    if configured in PORTAL_BROWSER_NAMES:
+        return [configured]
+
+    installed = [name for name in PORTAL_BROWSER_NAMES if find_portal_browser_binary(name)]
+    if installed:
+        return installed
+    return list(PORTAL_BROWSER_NAMES)
+
+
+def portal_html_looks_blocked(html: str) -> bool:
+    lowered = normalize_text(BeautifulSoup(html, "html.parser").get_text(" ", strip=True)).lower()
+    return any(marker in lowered for marker in PORTAL_BROWSER_REQUIRED_MARKERS)
+
+
+def should_retry_portal_with_browser(exc: Exception) -> bool:
+    if isinstance(exc, requests.exceptions.SSLError):
+        return True
+    if not isinstance(exc, requests.HTTPError):
+        return False
+    status_code = getattr(getattr(exc, "response", None), "status_code", None)
+    return status_code in {401, 403, 429}
+
+
+def fetch_portal_html_in_browser(url: str, timeout: int | None = None) -> str:
+    validate_safe_external_url(url)
+    active_timeout = timeout or portal_browser_timeout_seconds()
+    last_error: Exception | None = None
+
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support import expected_conditions as expected
+        from selenium.webdriver.support.ui import WebDriverWait
+    except ImportError as exc:
+        raise RuntimeError(
+            "Selenium is not installed, so browser-backed portal scraping is unavailable."
+        ) from exc
+
+    for browser_name in portal_browser_candidates():
+        driver = None
+        try:
+            service = None
+            if browser_name == "edge":
+                from selenium.webdriver.edge.options import Options as EdgeOptions
+                from selenium.webdriver.edge.service import Service as EdgeService
+
+                options = EdgeOptions()
+                browser_binary = find_portal_browser_binary("edge")
+                if browser_binary:
+                    options.binary_location = browser_binary
+                service = EdgeService(log_output=None if portal_browser_verbose_logs() else os.devnull)
+                driver_factory = webdriver.Edge
+            else:
+                from selenium.webdriver.chrome.options import Options as ChromeOptions
+                from selenium.webdriver.chrome.service import Service as ChromeService
+
+                options = ChromeOptions()
+                browser_binary = find_portal_browser_binary("chrome")
+                if browser_binary:
+                    options.binary_location = browser_binary
+                service = ChromeService(log_output=None if portal_browser_verbose_logs() else os.devnull)
+                driver_factory = webdriver.Chrome
+
+            if portal_browser_headless():
+                options.add_argument("--headless")
+            options.add_argument("--disable-gpu")
+            options.add_argument("--disable-logging")
+            options.add_argument("--log-level=3")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--window-size=1600,1200")
+            options.add_argument(f"--user-agent={DEFAULT_HTTP_USER_AGENT}")
+            options.add_experimental_option("excludeSwitches", ["enable-logging"])
+            options.page_load_strategy = "eager"
+
+            driver = driver_factory(options=options, service=service)
+            driver.set_page_load_timeout(active_timeout)
+            driver.get(url)
+            WebDriverWait(driver, active_timeout).until(expected.presence_of_element_located((By.TAG_NAME, "body")))
+            WebDriverWait(driver, min(active_timeout, 5)).until(
+                lambda current: bool(current.find_elements(By.CSS_SELECTOR, "a[href]"))
+                or current.execute_script("return document.readyState") == "complete"
+            )
+            return driver.page_source
+        except Exception as exc:
+            last_error = exc
+        finally:
+            if driver is not None:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+
+    raise RuntimeError(
+        f"Could not start a Selenium browser session for portal scraping: {last_error}"
+    )
 
 
 def guess_title_from_url(url: str) -> str:
@@ -2063,24 +2308,24 @@ def resolve_portal_keywords(raw_keywords: str | None) -> list[str]:
     return keywords
 
 
-def scrape_jobs_from_portal(url: str, keywords: list[str] | None = None) -> list[dict[str, str]]:
-    response = safe_get_url(url, timeout=20)
-    soup = BeautifulSoup(response.text, "html.parser")
+def extract_jobs_from_portal_html(url: str, html: str, keywords: list[str] | None = None) -> list[dict[str, str]]:
+    soup = BeautifulSoup(html, "html.parser")
     seen: set[str] = set()
     jobs: list[dict[str, str]] = []
-    active_keywords = [keyword.lower() for keyword in (keywords or list(DEFAULT_PORTAL_KEYWORDS))]
+    active_keywords = keywords or list(DEFAULT_PORTAL_KEYWORDS)
 
     for anchor in soup.find_all("a", href=True):
         title = normalize_text(anchor.get_text(" ", strip=True))
         href = urljoin(url, anchor["href"])
-        haystack = f"{title} {href}".lower()
+        summary = normalize_text(anchor.parent.get_text(" ", strip=True))
+        haystack = f"{title} {summary} {href}"
         if len(title) < 8:
             continue
-        if any(blocked in haystack for blocked in PORTAL_NEGATIVE_KEYWORDS):
+        if matches_any_keyword(haystack, PORTAL_NEGATIVE_KEYWORDS):
             continue
-        if not any(keyword in haystack for keyword in JOB_KEYWORDS):
+        if not matches_any_keyword(haystack, JOB_KEYWORDS):
             continue
-        if active_keywords and not any(keyword in haystack for keyword in active_keywords):
+        if active_keywords and not matches_any_keyword(haystack, active_keywords):
             continue
         if href in seen:
             continue
@@ -2089,7 +2334,6 @@ def scrape_jobs_from_portal(url: str, keywords: list[str] | None = None) -> list
         except ValueError:
             continue
         seen.add(href)
-        summary = normalize_text(anchor.parent.get_text(" ", strip=True))
         jobs.append(
             {
                 "title": title[:255],
@@ -2100,6 +2344,47 @@ def scrape_jobs_from_portal(url: str, keywords: list[str] | None = None) -> list
         if len(jobs) >= 40:
             break
     return jobs
+
+
+def scrape_jobs_from_portal(url: str, keywords: list[str] | None = None) -> list[dict[str, str]]:
+    mode = portal_fetch_mode()
+    browser_required_error: Exception | None = None
+    static_jobs: list[dict[str, str]] = []
+    static_html = ""
+
+    if mode != "browser":
+        try:
+            response = safe_get_url(url, timeout=20)
+            static_html = response.text
+        except Exception as exc:
+            if mode == "requests" or not should_retry_portal_with_browser(exc):
+                raise
+            browser_required_error = exc
+        else:
+            static_jobs = extract_jobs_from_portal_html(url, static_html, keywords)
+            if mode == "requests":
+                return static_jobs
+            if static_jobs and not portal_html_looks_blocked(static_html):
+                return static_jobs
+            if portal_html_looks_blocked(static_html):
+                browser_required_error = RuntimeError("Portal page requires browser rendering.")
+            else:
+                try:
+                    browser_html = fetch_portal_html_in_browser(url)
+                except Exception:
+                    return static_jobs
+                browser_jobs = extract_jobs_from_portal_html(url, browser_html, keywords)
+                return browser_jobs or static_jobs
+
+    browser_html = fetch_portal_html_in_browser(url)
+    browser_jobs = extract_jobs_from_portal_html(url, browser_html, keywords)
+    if browser_jobs or browser_required_error is None:
+        return browser_jobs
+
+    raise RuntimeError(
+        "Portal fetch was blocked over regular HTTP "
+        f"({browser_required_error}). Selenium browser fallback also found no matching jobs."
+    )
 
 
 def refresh_portal_jobs(

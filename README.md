@@ -10,7 +10,7 @@ Python fullstack job-search tracker built with Django, SQLite, DRF, Tailwind-sty
 - Cover letter and CV text storage for applied roles
 - Applied progress tracking
 - In-app schema panel to create tables and columns
-- Portal scraping flow that can push discovered jobs into `To Apply`
+- Portal scraping flow that can push discovered jobs into `To Apply`, with a Selenium browser fallback for 403 and JavaScript-heavy portals
 - Floating RAG chat assistant with quick prompts and a CPU-friendly local model path
 - Standalone SMTP notification script with optional portal auto-fetch
 - Local `.env` setup with seeded `admin` and `testuser` accounts
@@ -24,6 +24,13 @@ Python fullstack job-search tracker built with Django, SQLite, DRF, Tailwind-sty
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -e .
 ```
+
+Selenium will use a local Edge or Chrome installation for tougher portal pages. If a portal blocks normal HTTP requests, the app now falls back to a real browser session automatically.
+
+Optional portal scraping env vars:
+- `PORTAL_FETCH_MODE=auto|requests|browser`
+- `PORTAL_BROWSER=auto|edge|chrome`
+- `PORTAL_BROWSER_VERBOSE_LOGS=true` to show raw Selenium/Edge diagnostics again
 
 3. Run migrations:
 
