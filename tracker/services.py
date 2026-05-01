@@ -8,8 +8,8 @@ import shutil
 import socket
 import unicodedata
 from collections import Counter, defaultdict
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, replace
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -25,7 +25,18 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.cell.cell import Cell
 from openpyxl.utils import get_column_letter
 
-from .models import DynamicColumn, DynamicData, DynamicTable, PortalJobSuggestion
+from .models import (
+    ApplicationHistoryEvent,
+    ApplicationTag,
+    ApplicationTagAssignment,
+    DashboardBoard,
+    DashboardBoardItem,
+    DashboardPanelPreference,
+    DynamicColumn,
+    DynamicData,
+    DynamicTable,
+    PortalJobSuggestion,
+)
 
 DEFAULT_WORKBOOK_HEADERS = {
     "applied": [
@@ -219,6 +230,11 @@ COLUMN_OVERRIDES = {
             "placeholder": "https://company.example/jobs/role",
         },
         "deadline": {"data_type": DynamicColumn.DataType.DATE},
+        "number-of-positions": {
+            "data_type": DynamicColumn.DataType.NUMBER,
+            "placeholder": "1",
+            "help_text": "Optional. Record how many openings the posting mentions.",
+        },
         "english-test": {
             "data_type": DynamicColumn.DataType.STATUS,
             "choices_text": "No, Planned, Submitted, Waived, Required",
@@ -230,11 +246,20 @@ COLUMN_OVERRIDES = {
             "data_type": DynamicColumn.DataType.URL,
             "placeholder": "https://company.example/jobs/role",
         },
+        "deadline": {
+            "data_type": DynamicColumn.DataType.DATE,
+            "help_text": "Optional. Track the posting deadline so you can compare when you applied.",
+        },
         "result": {
             "data_type": DynamicColumn.DataType.STATUS,
             "choices_text": "Pending, Rejected, Withdrawn, Offer, Accepted",
         },
         "result-on": {"data_type": DynamicColumn.DataType.DATE},
+        "number-of-positions": {
+            "data_type": DynamicColumn.DataType.NUMBER,
+            "placeholder": "1",
+            "help_text": "Optional. Record how many openings the posting mentions.",
+        },
         "ai-reliance": {
             "data_type": DynamicColumn.DataType.STATUS,
             "choices_text": "None, Low, Medium, High",
@@ -339,6 +364,14 @@ EXTRA_COLUMNS = {
             "insert_after": "url",
             "placeholder": "Research Assistant, Computer Vision",
         },
+        {
+            "name": "Number of Positions",
+            "slug": "number-of-positions",
+            "data_type": DynamicColumn.DataType.NUMBER,
+            "insert_after": "type",
+            "placeholder": "1",
+            "help_text": "Optional. Record how many openings the posting mentions.",
+        },
     ],
     "applied": [
         {
@@ -347,6 +380,21 @@ EXTRA_COLUMNS = {
             "data_type": DynamicColumn.DataType.TEXT,
             "insert_after": "date",
             "placeholder": "Senior ML Engineer",
+        },
+        {
+            "name": "Deadline",
+            "slug": "deadline",
+            "data_type": DynamicColumn.DataType.DATE,
+            "insert_after": "type",
+            "help_text": "Optional. Track the posting deadline so you can compare when you applied.",
+        },
+        {
+            "name": "Number of Positions",
+            "slug": "number-of-positions",
+            "data_type": DynamicColumn.DataType.NUMBER,
+            "insert_after": "type",
+            "placeholder": "1",
+            "help_text": "Optional. Record how many openings the posting mentions.",
         },
         {
             "name": "Application Progress",
@@ -408,7 +456,7 @@ DASHBOARD_WIDGET_TEMPLATES = {
         "filters": "",
         "limit": "12",
         "metric": "Pipeline flow",
-        "notes": "From applied, through job type, into the current application stage.",
+        "notes": "Stage-to-stage application flow built from tracked history.",
         "accent": "Amber",
         "show-on-dashboard": "Show",
         "sort-order": "20",
@@ -430,6 +478,40 @@ DASHBOARD_WIDGET_TEMPLATES = {
         "show-on-dashboard": "Show",
         "sort-order": "30",
         "card-size": "Standard",
+        "chart-height": "Medium",
+    },
+    "applied-stage-timing": {
+        "title": "Average Days To Each Stage",
+        "chart-type": "Horizontal Bar",
+        "source-table": "applied",
+        "group-by-column": "",
+        "metric-column": "",
+        "aggregation": "Count Records",
+        "filters": "",
+        "limit": "12",
+        "metric": "Average days",
+        "notes": "Average days from the first tracked moment for each job, using To Apply history when available.",
+        "accent": "Emerald",
+        "show-on-dashboard": "Show",
+        "sort-order": "40",
+        "card-size": "Wide",
+        "chart-height": "Tall",
+    },
+    "applied-deadline-lead": {
+        "title": "Applied Before Deadline",
+        "chart-type": "Bar",
+        "source-table": "applied",
+        "group-by-column": "",
+        "metric-column": "",
+        "aggregation": "Count Records",
+        "filters": "",
+        "limit": "12",
+        "metric": "Applications",
+        "notes": "How many days before the deadline you usually submit. Records without both applied date and deadline are skipped.",
+        "accent": "Rose",
+        "show-on-dashboard": "Show",
+        "sort-order": "50",
+        "card-size": "Wide",
         "chart-height": "Medium",
     },
     "applied-outcomes-waterfall": {
@@ -468,7 +550,133 @@ DASHBOARD_WIDGET_TEMPLATES = {
     },
 }
 
-DEFAULT_DASHBOARD_TEMPLATE_KEYS = ("applied-job-types", "applied-flow")
+DEFAULT_DASHBOARD_TEMPLATE_KEYS = (
+    "applied-job-types",
+    "applied-flow",
+    "applied-progress-pie",
+    "applied-stage-timing",
+    "applied-deadline-lead",
+)
+
+DASHBOARD_PANEL_LIBRARY = (
+    {
+        "key": "stage-breakdown",
+        "label": "Application Stages",
+        "description": "Progress bars that summarize your current stage mix.",
+        "default_zone": "left",
+        "default_order": 10,
+    },
+    {
+        "key": "quick-actions",
+        "label": "Quick Actions",
+        "description": "Handy shortcuts for exporting, editing widgets, and managing layout.",
+        "default_zone": "left",
+        "default_order": 20,
+    },
+    {
+        "key": "plot-templates",
+        "label": "Plot Templates",
+        "description": "Starter plot definitions you can add or edit.",
+        "default_zone": "left",
+        "default_order": 30,
+    },
+    {
+        "key": "metrics-strip",
+        "label": "Metrics Strip",
+        "description": "Top-level counters for to-apply, applied, interviews, and portals.",
+        "default_zone": "main",
+        "default_order": 10,
+    },
+    {
+        "key": "widget-canvas",
+        "label": "Widget Canvas",
+        "description": "Your draggable chart area with resizable plot cards.",
+        "default_zone": "main",
+        "default_order": 20,
+    },
+    {
+        "key": "hidden-widgets",
+        "label": "Hidden Widgets",
+        "description": "Saved plots that are not currently shown on the dashboard.",
+        "default_zone": "right",
+        "default_order": 10,
+    },
+    {
+        "key": "upcoming-deadlines",
+        "label": "Upcoming Deadlines",
+        "description": "To Apply jobs with deadlines coming up.",
+        "default_zone": "right",
+        "default_order": 20,
+    },
+    {
+        "key": "recent-submissions",
+        "label": "Recent Submissions",
+        "description": "Your most recent applied records and their current stage.",
+        "default_zone": "right",
+        "default_order": 30,
+    },
+)
+
+DEFAULT_DASHBOARD_BOARD_PRESETS = (
+    {
+        "name": "Home Lens",
+        "description": "A clean view of your momentum, progress mix, and stage flow.",
+        "show_on_homepage": True,
+        "autoplay_enabled": True,
+        "autoplay_interval_seconds": 8,
+        "sort_order": 10,
+        "widgets": (
+            {"template_key": "applied-flow", "card_size": "Full", "chart_height": "Tall"},
+            {"template_key": "applied-progress-pie", "card_size": "Standard", "chart_height": "Medium"},
+            {"template_key": "applied-stage-timing", "card_size": "Wide", "chart_height": "Tall"},
+            {"template_key": "applied-deadline-lead", "card_size": "Wide", "chart_height": "Medium"},
+        ),
+    },
+    {
+        "name": "Pipeline Lab",
+        "description": "Focus on how applications move through the funnel and where outcomes stack up.",
+        "show_on_homepage": True,
+        "autoplay_enabled": False,
+        "autoplay_interval_seconds": 8,
+        "sort_order": 20,
+        "widgets": (
+            {"template_key": "applied-flow", "card_size": "Full", "chart_height": "Tall"},
+            {"template_key": "applied-stage-timing", "card_size": "Wide", "chart_height": "Tall"},
+            {"template_key": "applied-job-types", "card_size": "Wide", "chart_height": "Medium"},
+            {"template_key": "applied-progress-pie", "card_size": "Standard", "chart_height": "Medium"},
+        ),
+    },
+    {
+        "name": "Deadline Radar",
+        "description": "Keep an eye on submission lead time and upcoming date pressure.",
+        "show_on_homepage": False,
+        "autoplay_enabled": True,
+        "autoplay_interval_seconds": 10,
+        "sort_order": 30,
+        "widgets": (
+            {"template_key": "applied-deadline-lead", "card_size": "Wide", "chart_height": "Medium"},
+            {"template_key": "deadline-count", "card_size": "Wide", "chart_height": "Medium"},
+            {"template_key": "applied-progress-pie", "card_size": "Standard", "chart_height": "Medium"},
+        ),
+    },
+)
+
+JOB_TABLE_SLUGS = {"to-apply", "applied"}
+
+DEFAULT_APPLICATION_TAGS = ("Dummy", "PhD", "Job", "Priority")
+
+APPLICATION_STAGE_ORDER = [
+    "To Apply",
+    "Applied",
+    "Screening",
+    "Interview",
+    "Technical Interview",
+    "Assignment",
+    "Offer",
+    "Accepted",
+    "Rejected",
+    "Withdrawn",
+]
 
 JOB_KEYWORDS = (
     "job",
@@ -536,6 +744,7 @@ class DashboardWidget:
     chart_height: str
     grid_span: int
     chart_height_px: int
+    layout_item_id: int | None = None
 
 
 def normalize_slug(value: str) -> str:
@@ -1188,6 +1397,7 @@ def ensure_user_workspace(user, excel_path: str | Path | None = None) -> dict[st
             deprecated_columns.delete()
 
         tables[table_slug] = table
+    ensure_default_application_tags(user)
     return tables
 
 
@@ -1207,13 +1417,164 @@ def build_label(values: dict[str, str]) -> str:
     return "Untitled record"
 
 
+def ensure_default_application_tags(user) -> None:
+    for tag_name in DEFAULT_APPLICATION_TAGS:
+        ApplicationTag.objects.get_or_create(
+            user=user,
+            slug=normalize_slug(tag_name),
+            defaults={"name": tag_name},
+        )
+
+
+def parse_tag_names(raw_value: str | None) -> list[str]:
+    seen: set[str] = set()
+    tag_names: list[str] = []
+    for item in re.split(r"[,\n;]+", raw_value or ""):
+        cleaned = normalize_text(item)
+        slug = normalize_slug(cleaned) if cleaned else ""
+        if not cleaned or slug in seen:
+            continue
+        seen.add(slug)
+        tag_names.append(cleaned[:80])
+    return tag_names
+
+
+def get_application_tags_map(user, table_slug: str, row_keys: list[UUID]) -> dict[UUID, list[ApplicationTag]]:
+    assignments = list(
+        ApplicationTagAssignment.objects.filter(
+            user=user,
+            table_slug=table_slug,
+            record_row_key__in=row_keys,
+        )
+        .select_related("tag")
+        .order_by("tag__name", "id")
+    )
+    tags_by_row: dict[UUID, list[ApplicationTag]] = defaultdict(list)
+    for assignment in assignments:
+        tags_by_row[assignment.record_row_key].append(assignment.tag)
+    return tags_by_row
+
+
+def get_application_tags(user, table_slug: str, row_key: UUID | str) -> list[ApplicationTag]:
+    return get_application_tags_map(user, table_slug, [UUID(str(row_key))]).get(UUID(str(row_key)), [])
+
+
+def sync_application_tags(user, table_slug: str, row_key: UUID | str, tag_names: list[str]) -> list[ApplicationTag]:
+    ensure_default_application_tags(user)
+    row_uuid = UUID(str(row_key))
+    normalized_names = parse_tag_names(", ".join(tag_names))
+    desired_slugs = {normalize_slug(name): name for name in normalized_names}
+    existing_assignments = list(
+        ApplicationTagAssignment.objects.filter(
+            user=user,
+            table_slug=table_slug,
+            record_row_key=row_uuid,
+        ).select_related("tag")
+    )
+    existing_by_slug = {assignment.tag.slug: assignment for assignment in existing_assignments}
+
+    with transaction.atomic():
+        for slug, assignment in existing_by_slug.items():
+            if slug not in desired_slugs:
+                assignment.delete()
+
+        for slug, name in desired_slugs.items():
+            tag, _ = ApplicationTag.objects.get_or_create(
+                user=user,
+                slug=slug,
+                defaults={"name": name},
+            )
+            if tag.name != name:
+                tag.name = name
+                tag.save(update_fields=["name", "updated_at"])
+            ApplicationTagAssignment.objects.get_or_create(
+                user=user,
+                tag=tag,
+                table_slug=table_slug,
+                record_row_key=row_uuid,
+            )
+
+    return get_application_tags(user, table_slug, row_uuid)
+
+
+def add_application_tags(user, table_slug: str, row_key: UUID | str, tag_names: list[str]) -> list[ApplicationTag]:
+    existing = [tag.name for tag in get_application_tags(user, table_slug, row_key)]
+    merged = existing + list(tag_names)
+    return sync_application_tags(user, table_slug, row_key, merged)
+
+
+def remove_application_tags(user, table_slug: str, row_key: UUID | str, tag_names: list[str]) -> list[ApplicationTag]:
+    removal_slugs = {normalize_slug(name) for name in parse_tag_names(", ".join(tag_names))}
+    remaining = [
+        tag.name
+        for tag in get_application_tags(user, table_slug, row_key)
+        if tag.slug not in removal_slugs
+    ]
+    return sync_application_tags(user, table_slug, row_key, remaining)
+
+
+def move_application_related_data(
+    user,
+    source_table_slug: str,
+    target_table_slug: str,
+    row_key: UUID | str,
+) -> None:
+    row_uuid = UUID(str(row_key))
+    ApplicationHistoryEvent.objects.filter(
+        user=user,
+        table_slug=source_table_slug,
+        record_row_key=row_uuid,
+    ).update(table_slug=target_table_slug)
+    ApplicationTagAssignment.objects.filter(
+        user=user,
+        table_slug=source_table_slug,
+        record_row_key=row_uuid,
+    ).update(table_slug=target_table_slug)
+
+
+def delete_application_related_data(user, table_slug: str, row_key: UUID | str) -> None:
+    row_uuid = UUID(str(row_key))
+    ApplicationHistoryEvent.objects.filter(
+        user=user,
+        table_slug=table_slug,
+        record_row_key=row_uuid,
+    ).delete()
+    ApplicationTagAssignment.objects.filter(
+        user=user,
+        table_slug=table_slug,
+        record_row_key=row_uuid,
+    ).delete()
+
+
+def application_stage_sort_key(stage: str) -> tuple[int, str]:
+    normalized = normalize_text(stage)
+    if normalized in APPLICATION_STAGE_ORDER:
+        return (APPLICATION_STAGE_ORDER.index(normalized), normalized.lower())
+    return (len(APPLICATION_STAGE_ORDER), normalized.lower())
+
+
+def history_datetime_from_date_value(raw_value: Any) -> datetime | None:
+    normalized = normalize_date_value(raw_value)
+    if not normalized:
+        return None
+    try:
+        parsed_date = datetime.fromisoformat(normalized).date()
+    except ValueError:
+        return None
+    naive = datetime.combine(parsed_date, time(hour=12, minute=0))
+    return timezone.make_aware(naive, timezone.get_current_timezone())
+
+
 def default_sort_field_for_table(table: DynamicTable) -> str:
     columns = list(table.columns.filter(is_visible=True))
     by_slug = {column.slug: column for column in columns}
-    for slug in ("deadline", "date"):
-        column = by_slug.get(slug)
-        if column and column.data_type == DynamicColumn.DataType.DATE:
-            return slug
+    if table.slug == "to-apply":
+        deadline_column = by_slug.get("deadline")
+        if deadline_column and deadline_column.data_type == DynamicColumn.DataType.DATE:
+            return "deadline"
+    date_column = by_slug.get("date")
+    if date_column and date_column.data_type == DynamicColumn.DataType.DATE:
+        return "date"
     first_date_column = next(
         (column.slug for column in columns if column.data_type == DynamicColumn.DataType.DATE),
         None,
@@ -1435,6 +1796,7 @@ def save_record(
     values: dict[str, Any],
     row_key: UUID | str | None = None,
     metadata_map: dict[str, dict[str, Any]] | None = None,
+    skip_history: bool = False,
 ) -> UUID:
     if table.owner_id != user.id:
         raise PermissionError("You can only edit your own tables.")
@@ -1478,6 +1840,8 @@ def save_record(
                     value=serialized,
                     metadata=cell_metadata,
                 )
+    if not skip_history:
+        sync_job_history_for_saved_record(table, user, row_uuid, existing_record, prepared_values)
     return row_uuid
 
 
@@ -1490,10 +1854,14 @@ def save_partial_record(table: DynamicTable, user, row_key: UUID | str, values: 
     return save_record(table, user, merged, row_key=row_key, metadata_map=record.metadata)
 
 
-def delete_record(table: DynamicTable, user, row_key: UUID | str) -> None:
+def delete_record(table: DynamicTable, user, row_key: UUID | str, *, cleanup_related: bool = True) -> None:
     if table.owner_id != user.id:
         raise PermissionError("You can only delete records from your own tables.")
     DynamicData.objects.filter(table=table, user=user, row_key=row_key).delete()
+    if table.slug == "dashboard":
+        DashboardBoardItem.objects.filter(board__user=user, widget_row_key=UUID(str(row_key))).delete()
+    if cleanup_related and table.slug in JOB_TABLE_SLUGS:
+        delete_application_related_data(user, table.slug, row_key)
 
 
 def extract_cell_payload(
@@ -1537,6 +1905,10 @@ def import_workbook_for_user(
         if replace:
             DynamicData.objects.filter(table__owner=user, user=user).delete()
             PortalJobSuggestion.objects.filter(user=user).delete()
+            ApplicationHistoryEvent.objects.filter(user=user).delete()
+            ApplicationTagAssignment.objects.filter(user=user).delete()
+            DashboardBoardItem.objects.filter(board__user=user).delete()
+            DashboardBoard.objects.filter(user=user).delete()
 
         for sheet in workbook.worksheets:
             table_slug = normalize_slug(sheet.title)
@@ -1580,17 +1952,13 @@ def import_workbook_for_user(
                 if not any(row_payload.values()):
                     continue
 
-                for slug, value in row_payload.items():
-                    column = extra_columns.get(slug)
-                    if column:
-                        DynamicData.objects.create(
-                            table=table,
-                            column=column,
-                            user=user,
-                            row_key=row_key,
-                            value=value,
-                            metadata=row_metadata.get(slug, {}),
-                        )
+                save_record(
+                    table,
+                    user,
+                    row_payload,
+                    row_key=row_key,
+                    metadata_map=row_metadata,
+                )
                 imported_rows += 1
 
             imported_counts[table.slug] = imported_rows
@@ -1765,10 +2133,10 @@ def build_export_workbook(
     return workbook
 
 
-def infer_progress(record: GroupedRecord) -> str:
-    result = (record.values.get("result") or "").strip()
-    progress = (record.values.get("application-progress") or "").strip()
-    stages = (record.values.get("completed-stages") or "").lower()
+def infer_progress_from_values(values: dict[str, Any]) -> str:
+    result = normalize_text(values.get("result"))
+    progress = normalize_text(values.get("application-progress"))
+    stages = normalize_text(values.get("completed-stages")).lower()
     if result:
         normalized = result.lower()
         if normalized == "rejected":
@@ -1780,6 +2148,275 @@ def infer_progress(record: GroupedRecord) -> str:
     if "interview" in stages:
         return "Interview"
     return "Applied"
+
+
+def infer_progress(record: GroupedRecord) -> str:
+    return infer_progress_from_values(record.values)
+
+
+def record_application_history_event(
+    user,
+    table_slug: str,
+    row_key: UUID | str,
+    event_type: str,
+    *,
+    from_stage: str = "",
+    to_stage: str = "",
+    occurred_at: datetime | None = None,
+    notes: str = "",
+) -> ApplicationHistoryEvent:
+    return ApplicationHistoryEvent.objects.create(
+        user=user,
+        table_slug=table_slug,
+        record_row_key=UUID(str(row_key)),
+        event_type=event_type,
+        from_stage=normalize_text(from_stage),
+        to_stage=normalize_text(to_stage),
+        occurred_at=occurred_at or timezone.now(),
+        notes=normalize_text(notes),
+    )
+
+
+def sync_job_history_for_saved_record(
+    table: DynamicTable,
+    user,
+    row_key: UUID | str,
+    existing_record: GroupedRecord | None,
+    prepared_values: dict[str, Any],
+) -> None:
+    if table.slug not in JOB_TABLE_SLUGS:
+        return
+
+    if not existing_record:
+        if table.slug == "to-apply":
+            record_application_history_event(
+                user,
+                table.slug,
+                row_key,
+                ApplicationHistoryEvent.EventType.ADDED_TO_APPLY,
+                to_stage="To Apply",
+                notes="Added to To Apply.",
+            )
+            return
+
+        applied_at = history_datetime_from_date_value(prepared_values.get("date")) or timezone.now()
+        prior_history_time = (
+            ApplicationHistoryEvent.objects.filter(
+                user=user,
+                record_row_key=UUID(str(row_key)),
+            )
+            .order_by("-occurred_at", "-id")
+            .values_list("occurred_at", flat=True)
+            .first()
+        )
+        if prior_history_time and applied_at <= prior_history_time:
+            applied_at = prior_history_time + timedelta(minutes=1)
+        record_application_history_event(
+            user,
+            table.slug,
+            row_key,
+            ApplicationHistoryEvent.EventType.APPLIED,
+            to_stage="Applied",
+            occurred_at=applied_at,
+            notes="Application submitted.",
+        )
+        current_stage = infer_progress_from_values(prepared_values)
+        if current_stage != "Applied":
+            record_application_history_event(
+                user,
+                table.slug,
+                row_key,
+                ApplicationHistoryEvent.EventType.STAGE_CHANGE,
+                from_stage="Applied",
+                to_stage=current_stage,
+                notes=f"Progress updated to {current_stage}.",
+            )
+        return
+
+    if table.slug != "applied":
+        return
+
+    previous_stage = infer_progress(existing_record)
+    current_stage = infer_progress_from_values(prepared_values)
+    if current_stage != previous_stage:
+        record_application_history_event(
+            user,
+            table.slug,
+            row_key,
+            ApplicationHistoryEvent.EventType.STAGE_CHANGE,
+            from_stage=previous_stage,
+            to_stage=current_stage,
+            notes=f"Progress changed from {previous_stage} to {current_stage}.",
+        )
+
+
+def get_application_history_events(user, table_slug: str, row_key: UUID | str) -> list[ApplicationHistoryEvent]:
+    return list(
+        ApplicationHistoryEvent.objects.filter(
+            user=user,
+            table_slug=table_slug,
+            record_row_key=UUID(str(row_key)),
+        ).order_by("occurred_at", "id")
+    )
+
+
+def get_application_history_events_map(
+    user,
+    table_slug: str,
+    row_keys: list[UUID],
+) -> dict[UUID, list[ApplicationHistoryEvent]]:
+    if not row_keys:
+        return {}
+    history_entries = list(
+        ApplicationHistoryEvent.objects.filter(
+            user=user,
+            table_slug=table_slug,
+            record_row_key__in=row_keys,
+        ).order_by("record_row_key", "occurred_at", "id")
+    )
+    history_by_row: dict[UUID, list[ApplicationHistoryEvent]] = defaultdict(list)
+    for entry in history_entries:
+        history_by_row[entry.record_row_key].append(entry)
+    return history_by_row
+
+
+def earliest_tracked_job_timestamp(
+    record: GroupedRecord,
+    events: list[ApplicationHistoryEvent],
+) -> datetime | None:
+    if events:
+        return events[0].occurred_at
+    return (
+        history_datetime_from_date_value(record.values.get("date"))
+        or record.created_at
+        or record.updated_at
+    )
+
+
+def first_stage_timestamps(
+    record: GroupedRecord,
+    events: list[ApplicationHistoryEvent],
+) -> dict[str, datetime]:
+    first_seen: dict[str, datetime] = {}
+    for event in events:
+        stage = normalize_text(event.to_stage)
+        if stage and stage not in first_seen:
+            first_seen[stage] = event.occurred_at
+
+    if first_seen:
+        return first_seen
+
+    fallback_stage = infer_progress(record)
+    fallback_time = (
+        history_datetime_from_date_value(record.values.get("date"))
+        or record.created_at
+        or record.updated_at
+    )
+    if fallback_stage and fallback_time:
+        first_seen[fallback_stage] = fallback_time
+    return first_seen
+
+
+def build_application_history_timeline(
+    user,
+    table_slug: str,
+    record: GroupedRecord,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    events = get_application_history_events(user, table_slug, record.row_key)
+    if not events:
+        fallback_stage = "To Apply" if table_slug == "to-apply" else infer_progress(record)
+        fallback_time = record.created_at or timezone.now()
+        events = [
+            ApplicationHistoryEvent(
+                user=user,
+                table_slug=table_slug,
+                record_row_key=record.row_key,
+                event_type=(
+                    ApplicationHistoryEvent.EventType.ADDED_TO_APPLY
+                    if table_slug == "to-apply"
+                    else ApplicationHistoryEvent.EventType.APPLIED
+                ),
+                to_stage=fallback_stage,
+                occurred_at=fallback_time,
+                notes="Initial record snapshot.",
+            )
+        ]
+
+    timeline_items: list[dict[str, Any]] = []
+    plot_points: list[dict[str, str]] = []
+    for event in events:
+        if event.event_type == ApplicationHistoryEvent.EventType.ADDED_TO_APPLY:
+            title = "Added to To Apply"
+        elif event.event_type == ApplicationHistoryEvent.EventType.APPLIED:
+            title = "Applied"
+        elif event.from_stage and event.to_stage:
+            title = f"{event.from_stage} -> {event.to_stage}"
+        else:
+            title = event.to_stage or "Stage updated"
+
+        description = event.notes or title
+        timeline_items.append(
+            {
+                "title": title,
+                "description": description,
+                "stage": event.to_stage or event.from_stage or "",
+                "timestamp": event.occurred_at,
+                "timestamp_display": timezone.localtime(event.occurred_at).strftime("%d/%m/%Y %H:%M"),
+                "event_type": event.event_type,
+            }
+        )
+        plot_points.append(
+            {
+                "x": event.occurred_at.isoformat(),
+                "y": event.to_stage or event.from_stage or title,
+                "text": description,
+            }
+        )
+    stage_labels = [
+        label
+        for label in sorted(
+            {point["y"] for point in plot_points},
+            key=application_stage_sort_key,
+        )
+    ]
+
+    plot_config = {
+        "data": [
+            {
+                "type": "scatter",
+                "mode": "lines+markers+text",
+                "x": [point["x"] for point in plot_points],
+                "y": [point["y"] for point in plot_points],
+                "text": [point["text"] for point in plot_points],
+                "textposition": "top center",
+                "hovertemplate": "%{y}<br>%{x}<br>%{text}<extra></extra>",
+                "line": {"color": "#0ea5e9", "width": 3, "shape": "hv"},
+                "marker": {
+                    "size": 12,
+                    "color": [semantic_hex(point["y"]) for point in plot_points],
+                    "line": {"color": "rgba(15, 23, 42, 0.18)", "width": 1},
+                },
+            }
+        ],
+        "layout": {
+            "paper_bgcolor": "rgba(0,0,0,0)",
+            "plot_bgcolor": "rgba(0,0,0,0)",
+            "font": {"size": 12, "color": "#0f172a"},
+            "margin": {"l": 40, "r": 20, "t": 18, "b": 36},
+            "xaxis": {
+                "title": "Timeline",
+                "type": "date",
+                "showgrid": True,
+                "gridcolor": "rgba(148, 163, 184, 0.18)",
+            },
+            "yaxis": {
+                "title": "Stage",
+                "categoryorder": "array",
+                "categoryarray": stage_labels,
+            },
+        },
+    }
+    return timeline_items, plot_config
 
 
 def dashboard_template_initial_values(
@@ -1846,6 +2483,53 @@ def build_dashboard_template_catalog(dashboard_records: list[GroupedRecord]) -> 
     return catalog
 
 
+def dashboard_panel_catalog() -> dict[str, dict[str, Any]]:
+    return {item["key"]: dict(item) for item in DASHBOARD_PANEL_LIBRARY}
+
+
+def ensure_dashboard_panel_preferences(user) -> None:
+    existing = {
+        preference.panel_key: preference
+        for preference in DashboardPanelPreference.objects.filter(user=user)
+    }
+    for panel in DASHBOARD_PANEL_LIBRARY:
+        preference = existing.get(panel["key"])
+        if preference is None:
+            DashboardPanelPreference.objects.create(
+                user=user,
+                panel_key=panel["key"],
+                zone=panel["default_zone"],
+                sort_order=panel["default_order"],
+            )
+            continue
+        changed_fields: list[str] = []
+        if not normalize_text(preference.zone):
+            preference.zone = panel["default_zone"]
+            changed_fields.append("zone")
+        if preference.sort_order <= 0:
+            preference.sort_order = panel["default_order"]
+            changed_fields.append("sort_order")
+        if changed_fields:
+            preference.save(update_fields=changed_fields + ["updated_at"])
+
+
+def build_dashboard_panel_layout(user) -> dict[str, list[dict[str, Any]]]:
+    ensure_dashboard_panel_preferences(user)
+    catalog = dashboard_panel_catalog()
+    layout = {"left": [], "main": [], "right": [], "hidden": []}
+    preferences = DashboardPanelPreference.objects.filter(user=user).order_by("zone", "sort_order", "panel_key")
+    for preference in preferences:
+        panel = dict(catalog.get(preference.panel_key, {"key": preference.panel_key, "label": preference.panel_key.title()}))
+        panel.update(
+            {
+                "zone": preference.zone,
+                "sort_order": preference.sort_order,
+            }
+        )
+        layout.setdefault(preference.zone, []).append(panel)
+    return layout
+
+
 def resolve_dashboard_grid_span(card_size: str) -> int:
     normalized = normalize_text(card_size).lower()
     if normalized == "compact":
@@ -1878,6 +2562,172 @@ def normalize_dashboard_widget_dimensions(
     if normalized_chart_type == "sankey":
         return max(grid_span, 8), max(chart_height_px, 430)
     return grid_span, chart_height_px
+
+
+def clone_dashboard_widget_with_layout(
+    widget: DashboardWidget,
+    *,
+    card_size: str,
+    chart_height: str,
+    sort_order: int,
+    layout_item_id: int | None = None,
+) -> DashboardWidget:
+    grid_span = resolve_dashboard_grid_span(card_size)
+    chart_height_px = resolve_dashboard_chart_height(chart_height)
+    grid_span, chart_height_px = normalize_dashboard_widget_dimensions(
+        widget.chart_type,
+        grid_span=grid_span,
+        chart_height_px=chart_height_px,
+    )
+    return replace(
+        widget,
+        card_size=card_size,
+        chart_height=chart_height,
+        sort_order=sort_order,
+        grid_span=grid_span,
+        chart_height_px=chart_height_px,
+        layout_item_id=layout_item_id,
+    )
+
+
+def ensure_dashboard_widget_from_template(
+    user,
+    dashboard_table: DynamicTable,
+    template_key: str,
+    *,
+    existing_records: list[GroupedRecord] | None = None,
+) -> GroupedRecord:
+    dashboard_records = existing_records if existing_records is not None else get_records(dashboard_table, user)
+    for record in dashboard_records:
+        if normalize_text(record.values.get("template-key")) == template_key:
+            return record
+    row_key = save_record(
+        dashboard_table,
+        user,
+        dashboard_template_initial_values(template_key),
+    )
+    return get_record(dashboard_table, user, row_key)
+
+
+def add_dashboard_widget_to_board(
+    board: DashboardBoard,
+    widget_row_key: UUID | str,
+    *,
+    card_size: str = DashboardBoardItem.CardSize.STANDARD,
+    chart_height: str = DashboardBoardItem.ChartHeight.MEDIUM,
+) -> DashboardBoardItem:
+    allowed_card_sizes = {choice[0] for choice in DashboardBoardItem.CardSize.choices}
+    allowed_chart_heights = {choice[0] for choice in DashboardBoardItem.ChartHeight.choices}
+    if card_size not in allowed_card_sizes:
+        card_size = DashboardBoardItem.CardSize.STANDARD
+    if chart_height not in allowed_chart_heights:
+        chart_height = DashboardBoardItem.ChartHeight.MEDIUM
+    existing = DashboardBoardItem.objects.filter(board=board, widget_row_key=UUID(str(widget_row_key))).first()
+    if existing:
+        return existing
+    next_sort_order = (
+        DashboardBoardItem.objects.filter(board=board).order_by("-sort_order").values_list("sort_order", flat=True).first()
+        or 0
+    ) + 10
+    return DashboardBoardItem.objects.create(
+        board=board,
+        widget_row_key=UUID(str(widget_row_key)),
+        sort_order=next_sort_order,
+        card_size=card_size,
+        chart_height=chart_height,
+    )
+
+
+def ensure_default_dashboard_boards(
+    user,
+    dashboard_table: DynamicTable,
+    widget_records: list[GroupedRecord] | None = None,
+) -> list[DashboardBoard]:
+    existing_boards = list(DashboardBoard.objects.filter(user=user).prefetch_related("items"))
+    if existing_boards:
+        return existing_boards
+
+    dashboard_records = widget_records if widget_records is not None else get_records(dashboard_table, user)
+    widget_map = {
+        normalize_text(record.values.get("template-key")): record
+        for record in dashboard_records
+        if normalize_text(record.values.get("template-key"))
+    }
+    visible_widgets = sorted(
+        [
+            build_dashboard_widget(record, user)
+            for record in dashboard_records
+            if normalize_text(record.values.get("show-on-dashboard")).lower() != "hide"
+        ],
+        key=lambda widget: (widget.sort_order, widget.title.lower()),
+    )
+
+    created_boards: list[DashboardBoard] = []
+    for index, preset in enumerate(DEFAULT_DASHBOARD_BOARD_PRESETS, start=1):
+        board = DashboardBoard.objects.create(
+            user=user,
+            name=preset["name"],
+            description=preset["description"],
+            show_on_homepage=preset["show_on_homepage"],
+            autoplay_enabled=preset["autoplay_enabled"],
+            autoplay_interval_seconds=preset["autoplay_interval_seconds"],
+            sort_order=preset["sort_order"],
+        )
+        created_boards.append(board)
+        if index == 1 and visible_widgets:
+            for widget in visible_widgets:
+                DashboardBoardItem.objects.create(
+                    board=board,
+                    widget_row_key=widget.row_key,
+                    sort_order=widget.sort_order,
+                    card_size=widget.card_size,
+                    chart_height=widget.chart_height,
+                )
+            continue
+        for item_index, widget_spec in enumerate(preset["widgets"], start=1):
+            template_key = widget_spec["template_key"]
+            widget_record = widget_map.get(template_key)
+            if widget_record is None:
+                widget_record = ensure_dashboard_widget_from_template(
+                    user,
+                    dashboard_table,
+                    template_key,
+                    existing_records=dashboard_records,
+                )
+                widget_map[template_key] = widget_record
+                dashboard_records.append(widget_record)
+            DashboardBoardItem.objects.create(
+                board=board,
+                widget_row_key=widget_record.row_key,
+                sort_order=item_index * 10,
+                card_size=widget_spec["card_size"],
+                chart_height=widget_spec["chart_height"],
+            )
+    return created_boards
+
+
+def build_dashboard_board_widgets(
+    board: DashboardBoard | None,
+    widget_map: dict[UUID, DashboardWidget],
+) -> list[DashboardWidget]:
+    if board is None:
+        return []
+    board_items = list(board.items.order_by("sort_order", "id"))
+    widgets: list[DashboardWidget] = []
+    for item in board_items:
+        widget = widget_map.get(item.widget_row_key)
+        if widget is None:
+            continue
+        widgets.append(
+            clone_dashboard_widget_with_layout(
+                widget,
+                card_size=item.card_size,
+                chart_height=item.chart_height,
+                sort_order=item.sort_order,
+                layout_item_id=item.id,
+            )
+        )
+    return widgets
 
 
 def parse_filter_text(filter_text: str) -> dict[str, list[str]]:
@@ -2015,58 +2865,96 @@ def build_applied_job_type_chart(applied_records: list[GroupedRecord]) -> dict[s
     }
 
 
-def build_applied_flow_chart(applied_records: list[GroupedRecord]) -> dict[str, Any]:
+def build_applied_flow_sequences(user, applied_records: list[GroupedRecord]) -> list[list[str]]:
+    history_by_row = get_application_history_events_map(
+        user,
+        "applied",
+        [record.row_key for record in applied_records],
+    )
+    sequences: list[list[str]] = []
+    for record in applied_records:
+        sequence: list[str] = []
+        for event in history_by_row.get(record.row_key, []):
+            stage = normalize_text(event.to_stage)
+            if not stage:
+                continue
+            if not sequence or sequence[-1] != stage:
+                sequence.append(stage)
+
+        if not sequence:
+            current_stage = infer_progress(record)
+            if current_stage == "Applied":
+                sequence = ["Applied"]
+            else:
+                sequence = ["Applied", current_stage]
+        sequences.append(sequence)
+    return sequences
+
+
+def build_applied_flow_chart(applied_records: list[GroupedRecord], user) -> dict[str, Any]:
     if not applied_records:
         return {
             "title": "Applied Flow",
-            "description": "Applied to job type to progress status flow.",
+            "description": "Stage-to-stage application flow built from tracked history.",
             "kind": "plotly",
             "chart_type": "sankey",
             "chart_config": {"data": [], "layout": {}},
         }
 
-    root_label = "Applied"
-    job_types = sorted({normalize_text(record.values.get("type")) or "Unspecified" for record in applied_records})
-    stages = sorted({infer_progress(record) for record in applied_records})
-    counts_by_type = Counter(normalize_text(record.values.get("type")) or "Unspecified" for record in applied_records)
-    stage_counts = Counter(infer_progress(record) for record in applied_records)
-    node_keys = [root_label, *job_types, *stages]
-    node_labels = [
-        f"{root_label} ({len(applied_records)})",
-        *[f"{job_type} ({counts_by_type[job_type]})" for job_type in job_types],
-        *[f"{stage} ({stage_counts[stage]})" for stage in stages],
-    ]
-    node_indices = {label: index for index, label in enumerate(node_keys)}
-    job_type_colors = [semantic_hex(job_type, alpha=0.72) for job_type in job_types]
-    stage_colors = [semantic_hex(stage, alpha=0.82) for stage in stages]
+    sequences = build_applied_flow_sequences(user, applied_records)
+    stage_counts = Counter()
+    transition_counts = Counter()
+    for sequence in sequences:
+        for stage in sequence:
+            stage_counts[stage] += 1
+        for source_stage, target_stage in zip(sequence, sequence[1:]):
+            transition_counts[(source_stage, target_stage)] += 1
 
-    source: list[int] = []
-    target: list[int] = []
-    value: list[int] = []
-    link_colors: list[str] = []
-
-    for job_type, count in counts_by_type.items():
-        source.append(node_indices[root_label])
-        target.append(node_indices[job_type])
-        value.append(count)
-        link_colors.append(semantic_hex(job_type, alpha=0.24))
-
-    type_stage_counts = Counter(
-        (
-            normalize_text(record.values.get("type")) or "Unspecified",
-            infer_progress(record),
-        )
-        for record in applied_records
-    )
-    for (job_type, stage), count in type_stage_counts.items():
-        source.append(node_indices[job_type])
-        target.append(node_indices[stage])
-        value.append(count)
-        link_colors.append(semantic_hex(stage, alpha=0.24))
+    if not transition_counts:
+        tracked_label = "Tracked"
+        current_stage_counts = Counter(infer_progress(record) for record in applied_records)
+        node_keys = [tracked_label, *sorted(current_stage_counts, key=application_stage_sort_key)]
+        node_labels = [
+            f"{tracked_label} ({len(applied_records)})",
+            *[
+                f"{stage} ({current_stage_counts[stage]})"
+                for stage in sorted(current_stage_counts, key=application_stage_sort_key)
+            ],
+        ]
+        node_indices = {label: index for index, label in enumerate(node_keys)}
+        source = [node_indices[tracked_label] for _ in current_stage_counts]
+        target = [node_indices[stage] for stage in sorted(current_stage_counts, key=application_stage_sort_key)]
+        value = [current_stage_counts[stage] for stage in sorted(current_stage_counts, key=application_stage_sort_key)]
+        link_colors = [semantic_hex(stage, alpha=0.24) for stage in sorted(current_stage_counts, key=application_stage_sort_key)]
+        node_colors = [
+            "rgba(14, 165, 233, 0.85)",
+            *[semantic_hex(stage, alpha=0.82) for stage in sorted(current_stage_counts, key=application_stage_sort_key)],
+        ]
+    else:
+        ordered_stages = sorted(stage_counts, key=application_stage_sort_key)
+        node_keys = ordered_stages
+        node_labels = [f"{stage} ({stage_counts[stage]})" for stage in ordered_stages]
+        node_indices = {label: index for index, label in enumerate(node_keys)}
+        source = []
+        target = []
+        value = []
+        link_colors = []
+        for (source_stage, target_stage), count in sorted(
+            transition_counts.items(),
+            key=lambda item: (
+                application_stage_sort_key(item[0][0]),
+                application_stage_sort_key(item[0][1]),
+            ),
+        ):
+            source.append(node_indices[source_stage])
+            target.append(node_indices[target_stage])
+            value.append(count)
+            link_colors.append(semantic_hex(target_stage, alpha=0.24))
+        node_colors = [semantic_hex(stage, alpha=0.82) for stage in ordered_stages]
 
     return {
         "title": "Applied Flow",
-        "description": "From applied, through job type, into the current application stage.",
+        "description": "Stage-to-stage application flow built from tracked history.",
         "kind": "plotly",
         "chart_type": "sankey",
         "chart_config": {
@@ -2080,7 +2968,7 @@ def build_applied_flow_chart(applied_records: list[GroupedRecord]) -> dict[str, 
                         "thickness": 20,
                         "line": {"color": "rgba(15, 23, 42, 0.18)", "width": 1},
                         "label": node_labels,
-                        "color": ["rgba(14, 165, 233, 0.85)", *job_type_colors, *stage_colors],
+                        "color": node_colors,
                     },
                     "link": {
                         "source": source,
@@ -2096,6 +2984,116 @@ def build_applied_flow_chart(applied_records: list[GroupedRecord]) -> dict[str, 
                 "font": {"size": 12, "color": "#0f172a"},
                 "margin": {"l": 40, "r": 40, "t": 18, "b": 24},
             },
+        },
+    }
+
+
+def build_average_stage_timing_chart(applied_records: list[GroupedRecord], user) -> dict[str, Any]:
+    history_by_row = get_application_history_events_map(
+        user,
+        "applied",
+        [record.row_key for record in applied_records],
+    )
+    durations_by_stage: dict[str, list[float]] = defaultdict(list)
+
+    for record in applied_records:
+        events = history_by_row.get(record.row_key, [])
+        baseline = earliest_tracked_job_timestamp(record, events)
+        if baseline is None:
+            continue
+        for stage, occurred_at in first_stage_timestamps(record, events).items():
+            if stage == "To Apply" or occurred_at < baseline:
+                continue
+            durations_by_stage[stage].append((occurred_at - baseline).total_seconds() / 86400)
+
+    ordered_stages = [
+        stage
+        for stage in sorted(durations_by_stage, key=application_stage_sort_key)
+        if durations_by_stage[stage]
+    ]
+    labels = ordered_stages
+    values = [round(sum(durations_by_stage[stage]) / len(durations_by_stage[stage]), 1) for stage in ordered_stages]
+    return {
+        "labels": labels,
+        "values": values,
+        "chart_config": {
+            "labels": labels,
+            "datasets": [
+                {
+                    "label": "Average days from first tracked step",
+                    "data": values,
+                    "backgroundColor": [semantic_hex(stage, alpha=0.72) for stage in labels],
+                    "borderColor": [semantic_hex(stage) for stage in labels],
+                    "borderWidth": 1,
+                    "borderRadius": 8,
+                }
+            ],
+        },
+    }
+
+
+def deadline_lead_bucket(lead_days: int) -> str:
+    if lead_days < 0:
+        return "Applied late"
+    if lead_days == 0:
+        return "On deadline"
+    if lead_days <= 3:
+        return "1-3 days before"
+    if lead_days <= 7:
+        return "4-7 days before"
+    if lead_days <= 14:
+        return "8-14 days before"
+    return "15+ days before"
+
+
+def build_deadline_lead_time_chart(applied_records: list[GroupedRecord]) -> dict[str, Any]:
+    bucket_labels = [
+        "Applied late",
+        "On deadline",
+        "1-3 days before",
+        "4-7 days before",
+        "8-14 days before",
+        "15+ days before",
+    ]
+    bucket_colors = {
+        "Applied late": "rgba(244, 63, 94, 0.72)",
+        "On deadline": "rgba(245, 158, 11, 0.72)",
+        "1-3 days before": "rgba(249, 115, 22, 0.72)",
+        "4-7 days before": "rgba(14, 165, 233, 0.72)",
+        "8-14 days before": "rgba(16, 185, 129, 0.72)",
+        "15+ days before": "rgba(34, 197, 94, 0.72)",
+    }
+    bucket_counts = {label: 0 for label in bucket_labels}
+
+    for record in applied_records:
+        applied_date = normalize_date_value(record.values.get("date"))
+        deadline_date = normalize_date_value(record.values.get("deadline"))
+        if not applied_date or not deadline_date:
+            continue
+        try:
+            applied_on = datetime.fromisoformat(applied_date).date()
+            deadline_on = datetime.fromisoformat(deadline_date).date()
+        except ValueError:
+            continue
+        bucket_counts[deadline_lead_bucket((deadline_on - applied_on).days)] += 1
+
+    labels = bucket_labels
+    values = [bucket_counts[label] for label in labels]
+    return {
+        "labels": labels,
+        "values": values,
+        "chart_config": {
+            "labels": labels,
+            "datasets": [
+                {
+                    "label": "Applications",
+                    "data": values,
+                    "backgroundColor": [bucket_colors[label] for label in labels],
+                    "borderColor": [bucket_colors[label].replace("0.72", "1") for label in labels],
+                    "borderWidth": 1,
+                    "borderRadius": 8,
+                }
+            ],
         },
     }
 
@@ -2136,13 +3134,25 @@ def build_dashboard_widget(record: GroupedRecord, user) -> DashboardWidget:
         filter_map = parse_filter_text(filters)
         if filter_map:
             source_records = [item for item in source_records if record_matches_filters(item, filter_map)]
-        labels, values = aggregate_records(
-            source_records,
-            group_by_column=group_by_column,
-            aggregation=aggregation,
-            metric_column=metric_column,
-            limit=limit,
-        )
+        if template_key == "applied-stage-timing" and source_table_slug == "applied":
+            special_chart = build_average_stage_timing_chart(source_records, user)
+            labels = special_chart["labels"]
+            values = special_chart["values"]
+            chart_config = special_chart["chart_config"]
+        elif template_key == "applied-deadline-lead" and source_table_slug == "applied":
+            special_chart = build_deadline_lead_time_chart(source_records)
+            labels = special_chart["labels"]
+            values = special_chart["values"]
+            chart_config = special_chart["chart_config"]
+        else:
+            labels, values = aggregate_records(
+                source_records,
+                group_by_column=group_by_column,
+                aggregation=aggregation,
+                metric_column=metric_column,
+                limit=limit,
+            )
+
         if chart_type == "kpi":
             if values:
                 integer_value = int(values[0])
@@ -2154,12 +3164,12 @@ def build_dashboard_widget(record: GroupedRecord, user) -> DashboardWidget:
             if not metric_label:
                 metric_label = "Records in flow"
             if source_table_slug == "applied":
-                chart_config = build_applied_flow_chart(source_records)["chart_config"]
+                chart_config = build_applied_flow_chart(source_records, user)["chart_config"]
             else:
                 chart_config = {"data": [], "layout": {}}
         elif chart_type == "waterfall":
             chart_config = build_waterfall_payload(labels, values)
-        else:
+        elif not chart_config:
             chart_config = {
                 "labels": labels,
                 "datasets": [
@@ -2202,7 +3212,7 @@ def build_dashboard_widget(record: GroupedRecord, user) -> DashboardWidget:
     )
 
 
-def build_dashboard(user) -> dict[str, Any]:
+def build_dashboard(user, selected_board_id: int | None = None) -> dict[str, Any]:
     workbook_path = Path("Applications.xlsx") if Path("Applications.xlsx").exists() else None
     tables = ensure_user_workspace(user, workbook_path)
     to_apply_records = get_records(tables["to-apply"], user)
@@ -2211,6 +3221,7 @@ def build_dashboard(user) -> dict[str, Any]:
     dashboard_records = get_records(tables["dashboard"], user)
     portal_records = get_records(tables["portals"], user)
     all_dashboard_widgets = [build_dashboard_widget(record, user) for record in dashboard_records]
+    widget_map = {widget.row_key: widget for widget in all_dashboard_widgets}
     dashboard_widgets = sorted(
         [widget for widget in all_dashboard_widgets if widget.show_on_dashboard],
         key=lambda widget: (widget.sort_order, widget.title.lower()),
@@ -2219,6 +3230,17 @@ def build_dashboard(user) -> dict[str, Any]:
         [widget for widget in all_dashboard_widgets if not widget.show_on_dashboard],
         key=lambda widget: (widget.sort_order, widget.title.lower()),
     )
+    ensure_default_dashboard_boards(user, tables["dashboard"], dashboard_records)
+    dashboard_boards = list(DashboardBoard.objects.filter(user=user).prefetch_related("items").order_by("sort_order", "name", "id"))
+    homepage_boards = [board for board in dashboard_boards if board.show_on_homepage] or dashboard_boards[:1]
+    selected_homepage_board = next(
+        (board for board in dashboard_boards if selected_board_id and board.id == selected_board_id),
+        homepage_boards[0] if homepage_boards else None,
+    )
+    selected_homepage_widgets = build_dashboard_board_widgets(selected_homepage_board, widget_map)
+    if selected_homepage_board is None and not selected_homepage_widgets:
+        selected_homepage_widgets = dashboard_widgets
+    dashboard_panel_layout = build_dashboard_panel_layout(user)
 
     progress_counts = Counter(infer_progress(record) for record in applied_records)
     max_stage_count = max(progress_counts.values(), default=1)
@@ -2261,9 +3283,15 @@ def build_dashboard(user) -> dict[str, Any]:
         "upcoming_deadlines": upcoming_deadlines[:6],
         "recent_applied": applied_records[:6],
         "custom_cards": dashboard_records,
+        "all_dashboard_widgets": sorted(all_dashboard_widgets, key=lambda widget: (widget.sort_order, widget.title.lower())),
         "dashboard_widgets": dashboard_widgets,
         "hidden_dashboard_widgets": hidden_dashboard_widgets,
         "dashboard_templates": build_dashboard_template_catalog(dashboard_records),
+        "dashboard_boards": dashboard_boards,
+        "homepage_boards": homepage_boards,
+        "selected_homepage_board": selected_homepage_board,
+        "selected_homepage_widgets": selected_homepage_widgets,
+        "dashboard_panel_layout": dashboard_panel_layout,
         "dashboard_table": tables["dashboard"],
     }
 
@@ -2294,10 +3322,12 @@ def move_to_applied(
         applied_table,
         user,
         merged_values,
+        row_key=source_row_key or None,
         metadata_map=source_metadata,
     )
     if source_row_key:
-        delete_record(to_apply_table, user, source_row_key)
+        move_application_related_data(user, to_apply_table.slug, applied_table.slug, source_row_key)
+        delete_record(to_apply_table, user, source_row_key, cleanup_related=False)
     return row_uuid
 
 
@@ -2502,6 +3532,147 @@ def add_portal_job_to_to_apply(user, suggestion: PortalJobSuggestion) -> UUID:
     return row_key
 
 
+def seed_sample_jobs_for_user(user) -> None:
+    tables = ensure_user_workspace(user)
+    applied_table = tables["applied"]
+    sample_prefix = "https://example.com/sample-job-tracker/"
+
+    existing_records = [
+        *get_records(applied_table, user),
+        *get_records(tables["to-apply"], user),
+    ]
+    for record in existing_records:
+        if normalize_text(record.values.get("url")).startswith(sample_prefix):
+            delete_record(record.table, user, record.row_key)
+
+    now = timezone.now()
+    sample_jobs = [
+        {
+            "table": applied_table,
+            "values": {
+                "date": (timezone.localdate() - timedelta(days=18)).isoformat(),
+                "deadline": (timezone.localdate() + timedelta(days=4)).isoformat(),
+                "role-title": "Dummy Vision PhD",
+                "url": f"{sample_prefix}vision-phd",
+                "type": "PhD",
+                "number-of-positions": 2,
+                "application-progress": "Screening",
+                "remarks": "Demo sample with early-stage screening progress.",
+            },
+            "tags": ["Dummy", "PhD", "Priority"],
+            "history": [
+                (ApplicationHistoryEvent.EventType.ADDED_TO_APPLY, "", "To Apply", now - timedelta(days=21)),
+                (ApplicationHistoryEvent.EventType.APPLIED, "", "Applied", now - timedelta(days=18)),
+                (ApplicationHistoryEvent.EventType.STAGE_CHANGE, "Applied", "Screening", now - timedelta(days=14)),
+            ],
+        },
+        {
+            "table": applied_table,
+            "values": {
+                "date": (timezone.localdate() - timedelta(days=16)).isoformat(),
+                "deadline": (timezone.localdate() - timedelta(days=13)).isoformat(),
+                "role-title": "Dummy Research Engineer",
+                "url": f"{sample_prefix}research-engineer",
+                "type": "Job",
+                "number-of-positions": 1,
+                "application-progress": "Interview",
+                "remarks": "Demo sample currently in the interview loop.",
+            },
+            "tags": ["Dummy", "Job"],
+            "history": [
+                (ApplicationHistoryEvent.EventType.ADDED_TO_APPLY, "", "To Apply", now - timedelta(days=20)),
+                (ApplicationHistoryEvent.EventType.APPLIED, "", "Applied", now - timedelta(days=16)),
+                (ApplicationHistoryEvent.EventType.STAGE_CHANGE, "Applied", "Screening", now - timedelta(days=12)),
+                (ApplicationHistoryEvent.EventType.STAGE_CHANGE, "Screening", "Interview", now - timedelta(days=8)),
+            ],
+        },
+        {
+            "table": applied_table,
+            "values": {
+                "date": (timezone.localdate() - timedelta(days=13)).isoformat(),
+                "deadline": (timezone.localdate() - timedelta(days=13)).isoformat(),
+                "role-title": "Dummy Applied Scientist",
+                "url": f"{sample_prefix}applied-scientist",
+                "type": "Job",
+                "number-of-positions": 1,
+                "application-progress": "Technical Interview",
+                "remarks": "Demo sample with a technical round in progress.",
+            },
+            "tags": ["Dummy", "Job", "Priority"],
+            "history": [
+                (ApplicationHistoryEvent.EventType.ADDED_TO_APPLY, "", "To Apply", now - timedelta(days=15)),
+                (ApplicationHistoryEvent.EventType.APPLIED, "", "Applied", now - timedelta(days=13)),
+                (ApplicationHistoryEvent.EventType.STAGE_CHANGE, "Applied", "Screening", now - timedelta(days=11)),
+                (ApplicationHistoryEvent.EventType.STAGE_CHANGE, "Screening", "Interview", now - timedelta(days=7)),
+                (ApplicationHistoryEvent.EventType.STAGE_CHANGE, "Interview", "Technical Interview", now - timedelta(days=4)),
+            ],
+        },
+        {
+            "table": applied_table,
+            "values": {
+                "date": (timezone.localdate() - timedelta(days=14)).isoformat(),
+                "deadline": (timezone.localdate() - timedelta(days=16)).isoformat(),
+                "role-title": "Dummy Robotics Role",
+                "url": f"{sample_prefix}robotics-role",
+                "type": "Job",
+                "number-of-positions": 3,
+                "application-progress": "Offer",
+                "result": "Offer",
+                "result-on": (timezone.localdate() - timedelta(days=2)).isoformat(),
+                "remarks": "Demo sample with a positive outcome.",
+            },
+            "tags": ["Dummy", "Job"],
+            "history": [
+                (ApplicationHistoryEvent.EventType.ADDED_TO_APPLY, "", "To Apply", now - timedelta(days=17)),
+                (ApplicationHistoryEvent.EventType.APPLIED, "", "Applied", now - timedelta(days=14)),
+                (ApplicationHistoryEvent.EventType.STAGE_CHANGE, "Applied", "Screening", now - timedelta(days=10)),
+                (ApplicationHistoryEvent.EventType.STAGE_CHANGE, "Screening", "Interview", now - timedelta(days=6)),
+                (ApplicationHistoryEvent.EventType.STAGE_CHANGE, "Interview", "Offer", now - timedelta(days=2)),
+            ],
+        },
+        {
+            "table": applied_table,
+            "values": {
+                "date": (timezone.localdate() - timedelta(days=11)).isoformat(),
+                "deadline": (timezone.localdate() - timedelta(days=4)).isoformat(),
+                "role-title": "Dummy Platform Engineer",
+                "url": f"{sample_prefix}platform-engineer",
+                "type": "Job",
+                "number-of-positions": 2,
+                "application-progress": "Assignment",
+                "remarks": "Demo sample waiting on an assignment submission result.",
+            },
+            "tags": ["Dummy", "Job", "Priority"],
+            "history": [
+                (ApplicationHistoryEvent.EventType.ADDED_TO_APPLY, "", "To Apply", now - timedelta(days=13)),
+                (ApplicationHistoryEvent.EventType.APPLIED, "", "Applied", now - timedelta(days=11)),
+                (ApplicationHistoryEvent.EventType.STAGE_CHANGE, "Applied", "Screening", now - timedelta(days=8)),
+                (ApplicationHistoryEvent.EventType.STAGE_CHANGE, "Screening", "Interview", now - timedelta(days=5)),
+                (ApplicationHistoryEvent.EventType.STAGE_CHANGE, "Interview", "Assignment", now - timedelta(days=1)),
+            ],
+        },
+    ]
+
+    for sample in sample_jobs:
+        row_key = save_record(
+            sample["table"],
+            user,
+            sample["values"],
+            skip_history=True,
+        )
+        sync_application_tags(user, sample["table"].slug, row_key, sample["tags"])
+        for event_type, from_stage, to_stage, occurred_at in sample["history"]:
+            record_application_history_event(
+                user,
+                sample["table"].slug,
+                row_key,
+                event_type,
+                from_stage=from_stage,
+                to_stage=to_stage,
+                occurred_at=occurred_at,
+            )
+
+
 def ensure_named_user(
     *,
     username: str,
@@ -2577,6 +3748,7 @@ def bootstrap_local_users(excel_path: str | Path | None = None, replace: bool = 
     imported_counts = {}
     if excel_path and Path(excel_path).exists():
         imported_counts = import_workbook_for_user(excel_path, test_user, replace=replace)
+    seed_sample_jobs_for_user(test_user)
     return {
         "admin": admin,
         "test_user": test_user,

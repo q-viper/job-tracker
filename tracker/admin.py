@@ -2,7 +2,21 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from datetime import timedelta
 
-from .models import ChatMessage, ChatModelConfig, DynamicColumn, DynamicData, DynamicTable, PortalJobSuggestion, User
+from .models import (
+    ApplicationHistoryEvent,
+    ApplicationTag,
+    ApplicationTagAssignment,
+    ChatMessage,
+    ChatModelConfig,
+    DashboardBoard,
+    DashboardBoardItem,
+    DashboardPanelPreference,
+    DynamicColumn,
+    DynamicData,
+    DynamicTable,
+    PortalJobSuggestion,
+    User,
+)
 
 
 class DynamicColumnInline(admin.TabularInline):
@@ -90,6 +104,48 @@ class PortalJobSuggestionAdmin(admin.ModelAdmin):
     )
     list_filter = ("user", "added_to_apply", "portal_table")
     search_fields = ("title", "url", "portal_name", "user__username")
+
+
+@admin.register(ApplicationTag)
+class ApplicationTagAdmin(admin.ModelAdmin):
+    list_display = ("name", "user", "slug", "updated_at")
+    list_filter = ("user",)
+    search_fields = ("name", "slug", "user__username")
+
+
+@admin.register(ApplicationTagAssignment)
+class ApplicationTagAssignmentAdmin(admin.ModelAdmin):
+    list_display = ("tag", "user", "table_slug", "record_row_key", "created_at")
+    list_filter = ("user", "table_slug", "tag")
+    search_fields = ("tag__name", "user__username", "record_row_key")
+
+
+@admin.register(ApplicationHistoryEvent)
+class ApplicationHistoryEventAdmin(admin.ModelAdmin):
+    list_display = ("user", "table_slug", "record_row_key", "event_type", "from_stage", "to_stage", "occurred_at")
+    list_filter = ("user", "table_slug", "event_type")
+    search_fields = ("user__username", "record_row_key", "from_stage", "to_stage", "notes")
+
+
+@admin.register(DashboardPanelPreference)
+class DashboardPanelPreferenceAdmin(admin.ModelAdmin):
+    list_display = ("panel_key", "user", "zone", "sort_order", "updated_at")
+    list_filter = ("zone", "user")
+    search_fields = ("panel_key", "user__username")
+
+
+@admin.register(DashboardBoard)
+class DashboardBoardAdmin(admin.ModelAdmin):
+    list_display = ("name", "user", "show_on_homepage", "autoplay_enabled", "sort_order", "updated_at")
+    list_filter = ("show_on_homepage", "autoplay_enabled", "user")
+    search_fields = ("name", "description", "user__username")
+
+
+@admin.register(DashboardBoardItem)
+class DashboardBoardItemAdmin(admin.ModelAdmin):
+    list_display = ("board", "widget_row_key", "card_size", "chart_height", "sort_order", "updated_at")
+    list_filter = ("card_size", "chart_height", "board__user")
+    search_fields = ("board__name", "board__user__username", "widget_row_key")
 
 
 @admin.action(description="Purge expired chat history for selected users")

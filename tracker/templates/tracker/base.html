@@ -72,7 +72,8 @@
                 </div>
             </div>
             <nav class="mt-6 flex gap-3 overflow-x-auto pb-1">
-                <a href="{% url 'dashboard' %}" class="rounded-full px-4 py-2 text-sm font-medium transition {% if nav_section == 'dashboard' %}bg-slate-950 text-white dark:bg-sky-500 dark:text-slate-950{% else %}bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700{% endif %}">Dashboard</a>
+                <a href="{% url 'dashboard' %}" class="rounded-full px-4 py-2 text-sm font-medium transition {% if request.resolver_match.url_name == 'dashboard' %}bg-slate-950 text-white dark:bg-sky-500 dark:text-slate-950{% else %}bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700{% endif %}">Home</a>
+                <a href="{% url 'dashboard_boards' %}" class="rounded-full px-4 py-2 text-sm font-medium transition {% if request.resolver_match.url_name == 'dashboard_boards' or request.resolver_match.url_name == 'dashboard_designer' or request.resolver_match.url_name == 'dashboard_customize' %}bg-slate-950 text-white dark:bg-sky-500 dark:text-slate-950{% else %}bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700{% endif %}">Dashboards</a>
                 {% for table in navigation_tables %}
                     {% if table.slug == 'to-apply' %}
                         {% url 'to_apply_list' as item_url %}

@@ -1,0 +1,777 @@
+{% extends "tracker/base.html" %}
+{% load tracker_extras %}
+
+{% block title %}Design {{ board.name }} | Job Tracker{% endblock %}
+
+{% block content %}
+    <style>
+        #dashboard-designer-grid {
+            display: grid;
+            gap: 1.75rem;
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        @media (min-width: 1280px) {
+            #dashboard-designer-grid {
+                grid-template-columns: repeat(12, minmax(0, 1fr));
+            }
+        }
+
+        .dashboard-widget-card {
+            grid-column: span 12 / span 12;
+            position: relative;
+            transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+        }
+
+        @media (min-width: 1280px) {
+            .dashboard-widget-card {
+                grid-column: span var(--widget-span, 6) / span var(--widget-span, 6);
+            }
+        }
+
+        .dashboard-widget-card.is-resizing {
+            z-index: 10;
+            transform: scale(1.01);
+            box-shadow: 0 28px 60px rgba(15, 23, 42, 0.16);
+        }
+
+        .dashboard-widget-card.sortable-ghost {
+            opacity: 0.55;
+        }
+
+        .dashboard-widget-card.sortable-chosen {
+            cursor: grabbing;
+        }
+
+        .dashboard-plot-surface {
+            height: var(--widget-height, 360px);
+            min-height: 280px;
+        }
+
+        .dashboard-widget-header {
+            display: grid;
+            gap: 1rem;
+            grid-template-columns: minmax(0, 1fr);
+            grid-template-areas:
+                "meta"
+                "title"
+                "source"
+                "actions";
+            align-items: start;
+        }
+
+        .dashboard-widget-meta {
+            grid-area: meta;
+        }
+
+        .dashboard-widget-title {
+            grid-area: title;
+        }
+
+        .dashboard-widget-source {
+            grid-area: source;
+        }
+
+        .dashboard-widget-actions {
+            grid-area: actions;
+            justify-self: start;
+            width: 100%;
+        }
+
+        @media (min-width: 1280px) {
+            .dashboard-widget-header {
+                column-gap: 1.25rem;
+                grid-template-columns: minmax(0, 1fr) auto;
+                grid-template-areas:
+                    "meta actions"
+                    "title title"
+                    "source source";
+            }
+
+            .dashboard-widget-actions {
+                justify-self: end;
+                width: auto;
+            }
+        }
+
+        .designer-resize-handle {
+            position: absolute;
+            right: 1.2rem;
+            bottom: 1.15rem;
+            display: inline-flex;
+            height: 2.5rem;
+            width: 2.5rem;
+            align-items: center;
+            justify-content: center;
+            border-radius: 9999px;
+            background: rgba(14, 165, 233, 0.14);
+            color: rgb(3, 105, 161);
+            cursor: nwse-resize;
+            touch-action: none;
+            transition: transform 160ms ease, background-color 160ms ease;
+        }
+
+        .designer-resize-handle:hover {
+            transform: scale(1.04);
+            background: rgba(14, 165, 233, 0.2);
+        }
+
+        .designer-size-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            border-radius: 9999px;
+            background: rgb(241 245 249);
+            padding: 0.4rem 0.8rem;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: rgb(71 85 105);
+        }
+
+        .dark .designer-size-chip {
+            background: rgb(30 41 59);
+            color: rgb(226 232 240);
+        }
+    </style>
+
+    <section class="grid gap-6 xl:grid-cols-[19rem_minmax(0,1fr)_22rem] 2xl:grid-cols-[20rem_minmax(0,1.3fr)_24rem] xl:items-start">
+        <aside class="order-2 space-y-6 xl:order-1 xl:sticky xl:top-32">
+            <article class="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Board Settings</p>
+                <h2 class="mt-2 text-2xl font-bold tracking-tight">Make this board yours</h2>
+                <p class="mt-3 text-sm text-slate-600 dark:text-slate-300">
+                    Board settings save with the form. Card arrangement, drag order, and resize changes save automatically while you work.
+                </p>
+
+                <form method="post" class="mt-6 space-y-5">
+                    {% csrf_token %}
+                    {% if board_form.non_field_errors %}
+                        <div class="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
+                            {{ board_form.non_field_errors|join:", " }}
+                        </div>
+                    {% endif %}
+                    {% for field in board_form %}
+                        <div>
+                            <label for="{{ field.id_for_label }}" class="text-sm font-semibold text-slate-800 dark:text-slate-100">{{ field.label }}</label>
+                            <div>{{ field }}</div>
+                            {% if field.help_text %}
+                                <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">{{ field.help_text }}</p>
+                            {% endif %}
+                            {% if field.errors %}
+                                <p class="mt-2 text-sm text-rose-600">{{ field.errors|join:", " }}</p>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                    <button type="submit" class="w-full rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400">Save board settings</button>
+                </form>
+            </article>
+
+            <article class="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Board Actions</p>
+                <div class="mt-5 flex flex-col gap-3">
+                    <a href="{{ dashboard_url }}" class="rounded-full bg-slate-950 px-4 py-3 text-center text-sm font-medium text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400">Preview on homepage</a>
+                    <a href="{{ dashboard_boards_url }}" class="rounded-full bg-white px-4 py-3 text-center text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Back to dashboard library</a>
+                    <a href="{{ dashboard_customize_url }}" class="rounded-full bg-amber-100 px-4 py-3 text-center text-sm font-medium text-amber-900 transition hover:bg-amber-200 dark:bg-amber-500/20 dark:text-amber-200 dark:hover:bg-amber-500/30">Customize homepage rails</a>
+                    <a href="{{ dashboard_manage_url }}" class="rounded-full bg-white px-4 py-3 text-center text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Open widget table</a>
+                </div>
+                <form action="{{ board_delete_url }}" method="post" data-confirm-message="Delete this dashboard board? Its saved arrangement will be removed." class="mt-5">
+                    {% csrf_token %}
+                    <button type="submit" class="w-full rounded-full bg-rose-100 px-4 py-3 text-sm font-medium text-rose-700 transition hover:bg-rose-200 dark:bg-rose-500/20 dark:text-rose-200">Delete this board</button>
+                </form>
+            </article>
+        </aside>
+
+        <div class="order-1 space-y-6 xl:order-2">
+            <article class="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
+                        <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Designer</p>
+                        <h1 class="mt-2 text-3xl font-bold tracking-tight">{{ board.name }}</h1>
+                        <p class="mt-3 max-w-4xl text-sm text-slate-600 dark:text-slate-300">
+                            Drag cards by the dotted handle, pull the corner to resize them, and the charts will reflow live so you can see the final layout as you design it.
+                        </p>
+                    </div>
+                    <div class="flex flex-wrap gap-3">
+                        <a href="{{ dashboard_create_url }}" class="rounded-full bg-emerald-100 px-4 py-3 text-sm font-medium text-emerald-900 transition hover:bg-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-200 dark:hover:bg-emerald-500/30">Create custom widget</a>
+                        <a href="{{ dashboard_manage_url }}" class="rounded-full bg-white px-4 py-3 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Edit widget sources</a>
+                    </div>
+                </div>
+                {% if board.description %}
+                    <p class="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-300">{{ board.description }}</p>
+                {% endif %}
+            </article>
+
+            <section id="dashboard-designer-grid">
+                {% for widget in board_widgets %}
+                    {% url 'workspace_record_edit' 'dashboard' widget.row_key as widget_edit_url %}
+                    <article class="dashboard-widget-card rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900" data-row-key="{{ widget.row_key }}" data-layout-item-id="{{ widget.layout_item_id }}" style="--widget-span: {{ widget.grid_span }}; --widget-height: {{ widget.chart_height_px }}px;">
+                        <div class="dashboard-widget-header">
+                            <div class="dashboard-widget-meta flex min-w-0 flex-wrap items-center gap-2">
+                                <button type="button" class="widget-drag-handle inline-flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-600 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700" title="Drag to move">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 6.75h.008v.008H8.25V6.75Zm0 5.25h.008v.008H8.25V12Zm0 5.25h.008v.008H8.25v-.008Zm7.5-10.5h.008v.008h-.008V6.75Zm0 5.25h.008v.008h-.008V12Zm0 5.25h.008v.008h-.008v-.008Z" />
+                                    </svg>
+                                </button>
+                                <span class="rounded-full px-3 py-1 text-xs font-medium {{ widget.accent|status_chip_classes }}">{{ widget.accent }}</span>
+                                <span class="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">{{ widget.chart_type|title }}</span>
+                                <span class="designer-size-chip" data-size-label-for="{{ widget.row_key }}">{{ widget.card_size }} / {{ widget.chart_height }}</span>
+                            </div>
+                            <div class="dashboard-widget-actions flex flex-wrap items-center gap-2 xl:justify-end">
+                                <a href="{{ widget_edit_url }}" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Edit source</a>
+                                <button type="button" class="dashboard-expand-chart rounded-full bg-sky-100 px-4 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-200 dark:bg-sky-500/20 dark:text-sky-200 dark:hover:bg-sky-500/30" data-row-key="{{ widget.row_key }}">Expand</button>
+                                <button type="button" class="designer-remove-widget rounded-full bg-rose-100 px-4 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-200 dark:bg-rose-500/20 dark:text-rose-200" data-item-id="{{ widget.layout_item_id }}">Remove</button>
+                            </div>
+                            <p class="dashboard-widget-title break-words text-xl font-semibold leading-tight text-slate-900 dark:text-slate-100" title="{{ widget.title }}">{{ widget.title }}</p>
+                            <p class="dashboard-widget-source break-words text-sm leading-5 text-slate-500 dark:text-slate-400" title="{{ widget.source_table }}">{{ widget.source_table|default:"Custom source" }}</p>
+                        </div>
+
+                        {% if widget.chart_type == 'kpi' %}
+                            <div class="mt-6 rounded-3xl bg-slate-950 p-6 text-white dark:bg-sky-500 dark:text-slate-950">
+                                <p class="text-5xl font-bold tracking-tight">{{ widget.kpi_value }}</p>
+                                {% if widget.metric_label %}
+                                    <p class="mt-2 text-sm text-slate-300 dark:text-slate-950/80">{{ widget.metric_label }}</p>
+                                {% endif %}
+                            </div>
+                        {% elif widget.chart_type == 'sankey' %}
+                            <div class="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950/60">
+                                <div id="dashboard-chart-{{ widget.row_key }}" data-dashboard-chart="{{ widget.row_key }}" class="dashboard-plot-surface"></div>
+                            </div>
+                        {% else %}
+                            <div class="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950/60">
+                                <div class="dashboard-plot-surface">
+                                    <canvas id="dashboard-chart-{{ widget.row_key }}" data-dashboard-chart="{{ widget.row_key }}"></canvas>
+                                </div>
+                            </div>
+                        {% endif %}
+
+                        {% if widget.notes %}
+                            <p class="mt-4 break-words text-sm leading-6 text-slate-600 dark:text-slate-300">{{ widget.notes }}</p>
+                        {% endif %}
+                        <p class="mt-4 text-xs font-medium uppercase tracking-[0.22em] text-slate-400 dark:text-slate-500">Drag to reorder. Pull the corner to resize.</p>
+                        <button type="button" class="designer-resize-handle" aria-label="Resize widget" title="Resize widget">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 8.25 8.25 15.75m10.5-6-4.5 4.5m7.5-1.5-7.5 7.5" />
+                            </svg>
+                        </button>
+                    </article>
+                {% empty %}
+                    <article class="rounded-[2rem] border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+                        This board is empty right now. Add a starter plot or a saved widget from the right rail.
+                    </article>
+                {% endfor %}
+            </section>
+        </div>
+
+        <aside class="order-3 space-y-6 xl:sticky xl:top-32">
+            <article class="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Starter Plots</p>
+                        <h2 class="mt-2 text-xl font-bold tracking-tight">Built-in templates</h2>
+                    </div>
+                </div>
+                <div class="mt-5 max-h-[28rem] space-y-4 overflow-y-auto pr-2">
+                    {% for item in dashboard_templates %}
+                        <div class="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <p class="break-words text-sm font-semibold leading-5 text-slate-900 dark:text-slate-100">{{ item.title }}</p>
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ item.chart_type }}</p>
+                                </div>
+                                {% if item.on_board %}
+                                    <span class="rounded-full bg-sky-100 px-2 py-1 text-[10px] font-semibold text-sky-800 dark:bg-sky-500/20 dark:text-sky-200">On board</span>
+                                {% endif %}
+                            </div>
+                            <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{{ item.notes }}</p>
+                            <div class="mt-3 flex flex-wrap gap-2">
+                                <button type="button" class="add-template-to-board rounded-full bg-slate-950 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400" data-template-key="{{ item.key }}" {% if item.on_board %}disabled{% endif %}>
+                                    {% if item.on_board %}Added{% else %}Add starter{% endif %}
+                                </button>
+                                <a href="{% if item.edit_url %}{{ item.edit_url }}{% else %}{{ item.create_url }}{% endif %}" class="rounded-full bg-white px-3 py-2 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">
+                                    {% if item.edit_url %}Edit source{% else %}Create source{% endif %}
+                                </a>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            </article>
+
+            <article class="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Saved Widgets</p>
+                        <h2 class="mt-2 text-xl font-bold tracking-tight">Available to add</h2>
+                    </div>
+                </div>
+                <div class="mt-5 max-h-[28rem] space-y-4 overflow-y-auto pr-2">
+                    {% for widget in available_widgets %}
+                        {% url 'workspace_record_edit' 'dashboard' widget.row_key as widget_edit_url %}
+                        <div class="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <p class="break-words text-sm font-semibold leading-5 text-slate-900 dark:text-slate-100">{{ widget.title }}</p>
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ widget.source_table|default:"Custom source" }} · {{ widget.chart_type|title }}</p>
+                                </div>
+                                <span class="rounded-full px-2 py-1 text-[10px] font-semibold {{ widget.accent|status_chip_classes }}">{{ widget.accent }}</span>
+                            </div>
+                            {% if widget.notes %}
+                                <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{{ widget.notes }}</p>
+                            {% endif %}
+                            <div class="mt-3 flex flex-wrap gap-2">
+                                <button type="button" class="add-widget-to-board rounded-full bg-slate-950 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400" data-widget-row-key="{{ widget.row_key }}">Add to board</button>
+                                <a href="{{ widget_edit_url }}" class="rounded-full bg-white px-3 py-2 text-[11px] font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Edit source</a>
+                            </div>
+                        </div>
+                    {% empty %}
+                        <p class="text-sm text-slate-600 dark:text-slate-300">Every saved widget is already on this board. Create a new custom widget if you want something extra.</p>
+                    {% endfor %}
+                </div>
+            </article>
+        </aside>
+    </section>
+
+    <div id="dashboard-chart-modal" class="fixed inset-0 z-[70] hidden bg-slate-950/65 p-4 backdrop-blur">
+        <div class="mx-auto flex h-full max-w-6xl items-center justify-center">
+            <div class="w-full rounded-[2rem] border border-white/20 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-950">
+                <div class="flex items-center justify-between gap-4">
+                    <div>
+                        <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Expanded chart</p>
+                        <h2 id="dashboard-chart-modal-title" class="mt-2 text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100"></h2>
+                    </div>
+                    <button id="dashboard-chart-modal-close" type="button" class="rounded-full bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700">Close</button>
+                </div>
+                <div class="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/60">
+                    <div id="dashboard-chart-modal-surface" class="h-[60vh] min-h-[24rem]"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.3/Sortable.min.js"></script>
+    <script>
+        const boardId = Number("{{ board.id }}");
+        const dashboardWidgets = JSON.parse("{{ board_widgets_json|escapejs }}");
+        const widgetMap = Object.fromEntries(dashboardWidgets.map((widget) => [widget.row_key, widget]));
+        const chartInstances = {};
+        const resizeObservers = [];
+        const widgetGrid = document.getElementById("dashboard-designer-grid");
+        const modal = document.getElementById("dashboard-chart-modal");
+        const modalSurface = document.getElementById("dashboard-chart-modal-surface");
+        const modalTitle = document.getElementById("dashboard-chart-modal-title");
+        const cardSizeMap = { Compact: 4, Standard: 6, Wide: 8, Full: 12 };
+        const chartHeightMap = { Short: 280, Medium: 360, Tall: 430, XL: 520 };
+
+        function csrfToken() {
+            return document.querySelector("#quassi-csrf-form input[name=csrfmiddlewaretoken]")?.value || "";
+        }
+
+        function normalizedWidgetDimensions(widget) {
+            const span = cardSizeMap[widget.card_size] || widget.grid_span || 6;
+            const height = chartHeightMap[widget.chart_height] || widget.chart_height_px || 360;
+            if (widget.chart_type === "sankey") {
+                return {
+                    span: Math.max(span, 8),
+                    height: Math.max(height, 430),
+                };
+            }
+            return { span, height };
+        }
+
+        function buildWidgetChartJsConfig(widget) {
+            const data = JSON.parse(JSON.stringify(widget.chart_config || {}));
+            const options = {
+                responsive: true,
+                maintainAspectRatio: false,
+                layout: {
+                    padding: { top: 8, right: 12, bottom: 8, left: 12 },
+                },
+                plugins: {
+                    legend: { position: "bottom", labels: { boxWidth: 14, padding: 18 } },
+                },
+            };
+            if (widget.chart_type === "horizontal-bar") {
+                return { type: "bar", data, options: { ...options, indexAxis: "y" } };
+            }
+            if (widget.chart_type === "area") {
+                data.datasets = (data.datasets || []).map((dataset) => ({ ...dataset, fill: true, tension: 0.28 }));
+                return { type: "line", data, options };
+            }
+            if (widget.chart_type === "line") {
+                data.datasets = (data.datasets || []).map((dataset) => ({ ...dataset, fill: false, tension: 0.28 }));
+                return { type: "line", data, options };
+            }
+            if (widget.chart_type === "waterfall") {
+                return {
+                    type: "bar",
+                    data,
+                    options: {
+                        ...options,
+                        plugins: {
+                            ...options.plugins,
+                            tooltip: {
+                                callbacks: {
+                                    label(context) {
+                                        const rawValues = context.dataset.rawValues || [];
+                                        return `${context.label}: ${rawValues[context.dataIndex] ?? 0}`;
+                                    },
+                                },
+                            },
+                        },
+                    },
+                };
+            }
+            return { type: widget.chart_type === "polar-area" ? "polarArea" : widget.chart_type, data, options };
+        }
+
+        function sankeyLayout(widget, heightOverride = null) {
+            const dimensions = normalizedWidgetDimensions(widget);
+            const layout = JSON.parse(JSON.stringify((widget.chart_config || {}).layout || {}));
+            layout.height = heightOverride || dimensions.height;
+            layout.margin = { l: 52, r: 52, t: 68, b: 28 };
+            const existingAnnotations = Array.isArray(layout.annotations) ? [...layout.annotations] : [];
+            if (widget.kpi_value) {
+                existingAnnotations.push({
+                    xref: "paper",
+                    yref: "paper",
+                    x: 0.985,
+                    y: 1.12,
+                    xanchor: "right",
+                    yanchor: "top",
+                    align: "right",
+                    showarrow: false,
+                    text: `<b style="font-size:22px;">${widget.kpi_value}</b><br><span style="font-size:10px; letter-spacing:0.18em; text-transform:uppercase;">${widget.metric_label || "Records in flow"}</span>`,
+                    font: {
+                        color: "#0f172a",
+                        size: 12,
+                    },
+                });
+            }
+            layout.annotations = existingAnnotations;
+            return layout;
+        }
+
+        function renderWidget(widget, targetId) {
+            if (widget.chart_type === "kpi") {
+                return;
+            }
+            if (widget.chart_type === "sankey") {
+                const node = document.getElementById(targetId);
+                if (node) {
+                    Plotly.newPlot(node, widget.chart_config.data, sankeyLayout(widget), { displayModeBar: false, responsive: true });
+                    chartInstances[widget.row_key] = { kind: "plotly", node };
+                }
+                return;
+            }
+            const canvas = document.getElementById(targetId);
+            if (!canvas) {
+                return;
+            }
+            chartInstances[widget.row_key] = { kind: "chartjs", chart: new Chart(canvas, buildWidgetChartJsConfig(widget)), canvas };
+        }
+
+        function applyWidgetDimensions(rowKey) {
+            const widget = widgetMap[rowKey];
+            const card = document.querySelector(`.dashboard-widget-card[data-row-key="${rowKey}"]`);
+            if (!widget || !card) {
+                return;
+            }
+            const dimensions = normalizedWidgetDimensions(widget);
+            widget.grid_span = dimensions.span;
+            widget.chart_height_px = dimensions.height;
+            card.style.setProperty("--widget-span", String(dimensions.span));
+            card.style.setProperty("--widget-height", `${dimensions.height}px`);
+            const sizeLabel = card.querySelector(`[data-size-label-for="${rowKey}"]`);
+            if (sizeLabel) {
+                sizeLabel.textContent = `${widget.card_size} / ${widget.chart_height}`;
+            }
+        }
+
+        function resizeRenderedWidget(rowKey) {
+            const widget = widgetMap[rowKey];
+            const instance = chartInstances[rowKey];
+            if (!widget || !instance) {
+                return;
+            }
+            const dimensions = normalizedWidgetDimensions(widget);
+            if (instance.kind === "plotly") {
+                instance.node.style.height = `${dimensions.height}px`;
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        Plotly.relayout(instance.node, sankeyLayout(widget, dimensions.height));
+                        Plotly.Plots.resize(instance.node);
+                    });
+                });
+                return;
+            }
+            if (instance.canvas && instance.canvas.parentElement) {
+                instance.canvas.parentElement.style.height = `${dimensions.height}px`;
+            }
+            requestAnimationFrame(() => instance.chart.resize());
+        }
+
+        function registerResizeObservers() {
+            Object.entries(chartInstances).forEach(([rowKey, instance]) => {
+                const target = instance.kind === "plotly"
+                    ? instance.node.closest(".dashboard-widget-card")
+                    : instance.canvas.closest(".dashboard-widget-card");
+                if (!target || typeof ResizeObserver === "undefined") {
+                    return;
+                }
+                const observer = new ResizeObserver(() => resizeRenderedWidget(rowKey));
+                observer.observe(target);
+                resizeObservers.push(observer);
+            });
+        }
+
+        function cardSizeFromSpan(span, chartType) {
+            const minimum = chartType === "sankey" ? 8 : 4;
+            const bounded = Math.max(minimum, Math.min(span, 12));
+            if (bounded <= 5) {
+                return "Compact";
+            }
+            if (bounded <= 7) {
+                return "Standard";
+            }
+            if (bounded <= 10) {
+                return "Wide";
+            }
+            return "Full";
+        }
+
+        function chartHeightFromPixels(height, chartType) {
+            const minimum = chartType === "sankey" ? 430 : 280;
+            const bounded = Math.max(minimum, height);
+            if (chartType === "sankey") {
+                return bounded >= 480 ? "XL" : "Tall";
+            }
+            if (bounded < 320) {
+                return "Short";
+            }
+            if (bounded < 395) {
+                return "Medium";
+            }
+            if (bounded < 475) {
+                return "Tall";
+            }
+            return "XL";
+        }
+
+        async function persistBoardItem(itemId, payload) {
+            const response = await fetch(`/api/dashboards/${boardId}/items/${itemId}/`, {
+                method: "PATCH",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": csrfToken(),
+                },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) {
+                throw new Error("Could not update this dashboard card.");
+            }
+            return response.json();
+        }
+
+        async function addWidgetToBoard(payload) {
+            const response = await fetch(`/api/dashboards/${boardId}/items/`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": csrfToken(),
+                },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) {
+                throw new Error("Could not add the widget to this board.");
+            }
+            return response.json();
+        }
+
+        async function removeBoardItem(itemId) {
+            const response = await fetch(`/api/dashboards/${boardId}/items/${itemId}/`, {
+                method: "DELETE",
+                headers: {
+                    "X-CSRFToken": csrfToken(),
+                },
+            });
+            if (!response.ok) {
+                throw new Error("Could not remove the widget from this board.");
+            }
+            return response.json();
+        }
+
+        function attachResizeHandle(handle) {
+            handle.addEventListener("pointerdown", (event) => {
+                const card = handle.closest(".dashboard-widget-card");
+                const rowKey = card?.dataset.rowKey;
+                const widget = rowKey ? widgetMap[rowKey] : null;
+                if (!card || !rowKey || !widget) {
+                    return;
+                }
+                event.preventDefault();
+                const gridRect = widgetGrid.getBoundingClientRect();
+                const cardRect = card.getBoundingClientRect();
+                const startX = event.clientX;
+                const startY = event.clientY;
+                const initialCardSize = widget.card_size;
+                const initialChartHeight = widget.chart_height;
+                const initialDimensions = normalizedWidgetDimensions(widget);
+                const columnWidth = Math.max(gridRect.width / 12, 1);
+
+                card.classList.add("is-resizing");
+                handle.setPointerCapture(event.pointerId);
+
+                const syncSize = () => {
+                    applyWidgetDimensions(rowKey);
+                    resizeRenderedWidget(rowKey);
+                };
+
+                const onPointerMove = (moveEvent) => {
+                    const span = Math.round((cardRect.width + (moveEvent.clientX - startX)) / columnWidth);
+                    const chartHeight = initialDimensions.height + (moveEvent.clientY - startY);
+                    widget.card_size = cardSizeFromSpan(span, widget.chart_type);
+                    widget.chart_height = chartHeightFromPixels(chartHeight, widget.chart_type);
+                    syncSize();
+                };
+
+                const finishResize = async (pointerId, shouldPersist) => {
+                    handle.releasePointerCapture(pointerId);
+                    handle.removeEventListener("pointermove", onPointerMove);
+                    handle.removeEventListener("pointerup", onPointerUp);
+                    handle.removeEventListener("pointercancel", onPointerCancel);
+                    card.classList.remove("is-resizing");
+
+                    if (!shouldPersist) {
+                        widget.card_size = initialCardSize;
+                        widget.chart_height = initialChartHeight;
+                        syncSize();
+                        return;
+                    }
+
+                    try {
+                        const payload = await persistBoardItem(widget.layout_item_id, {
+                            card_size: widget.card_size,
+                            chart_height: widget.chart_height,
+                        });
+                        widgetMap[rowKey] = payload.widget;
+                        syncSize();
+                    } catch (error) {
+                        widgetMap[rowKey].card_size = initialCardSize;
+                        widgetMap[rowKey].chart_height = initialChartHeight;
+                        syncSize();
+                    }
+                };
+
+                const onPointerUp = (pointerUpEvent) => finishResize(pointerUpEvent.pointerId, true);
+                const onPointerCancel = (pointerCancelEvent) => finishResize(pointerCancelEvent.pointerId, false);
+
+                handle.addEventListener("pointermove", onPointerMove);
+                handle.addEventListener("pointerup", onPointerUp);
+                handle.addEventListener("pointercancel", onPointerCancel);
+            });
+        }
+
+        dashboardWidgets.forEach((widget) => {
+            applyWidgetDimensions(widget.row_key);
+            renderWidget(widget, `dashboard-chart-${widget.row_key}`);
+        });
+        registerResizeObservers();
+
+        if (widgetGrid && typeof Sortable !== "undefined") {
+            new Sortable(widgetGrid, {
+                animation: 180,
+                handle: ".widget-drag-handle",
+                onEnd: async () => {
+                    const cards = [...widgetGrid.querySelectorAll(".dashboard-widget-card[data-layout-item-id]")];
+                    try {
+                        await Promise.all(
+                            cards.map((card, index) =>
+                                persistBoardItem(card.dataset.layoutItemId, { sort_order: (index + 1) * 10 })
+                            )
+                        );
+                    } catch (error) {
+                        window.location.reload();
+                    }
+                },
+            });
+        }
+
+        document.querySelectorAll(".designer-resize-handle").forEach((handle) => attachResizeHandle(handle));
+
+        document.querySelectorAll(".designer-remove-widget").forEach((button) => {
+            button.addEventListener("click", async () => {
+                if (!window.confirm("Remove this widget from the board?")) {
+                    return;
+                }
+                try {
+                    button.disabled = true;
+                    await removeBoardItem(button.dataset.itemId);
+                    window.location.reload();
+                } catch (error) {
+                    button.disabled = false;
+                }
+            });
+        });
+
+        document.querySelectorAll(".add-template-to-board").forEach((button) => {
+            button.addEventListener("click", async () => {
+                try {
+                    button.disabled = true;
+                    await addWidgetToBoard({ template_key: button.dataset.templateKey });
+                    window.location.reload();
+                } catch (error) {
+                    button.disabled = false;
+                }
+            });
+        });
+
+        document.querySelectorAll(".add-widget-to-board").forEach((button) => {
+            button.addEventListener("click", async () => {
+                try {
+                    button.disabled = true;
+                    await addWidgetToBoard({ widget_row_key: button.dataset.widgetRowKey });
+                    window.location.reload();
+                } catch (error) {
+                    button.disabled = false;
+                }
+            });
+        });
+
+        document.querySelectorAll(".dashboard-expand-chart").forEach((button) => {
+            button.addEventListener("click", () => {
+                const widget = widgetMap[button.dataset.rowKey];
+                if (!widget) {
+                    return;
+                }
+                modalTitle.textContent = widget.title;
+                modalSurface.innerHTML = "";
+                if (widget.chart_type === "sankey") {
+                    const node = document.createElement("div");
+                    node.className = "h-full";
+                    modalSurface.appendChild(node);
+                    Plotly.newPlot(node, widget.chart_config.data, sankeyLayout(widget, 560), { displayModeBar: false, responsive: true });
+                } else if (widget.chart_type !== "kpi") {
+                    const canvas = document.createElement("canvas");
+                    modalSurface.appendChild(canvas);
+                    new Chart(canvas, buildWidgetChartJsConfig(widget));
+                } else {
+                    modalSurface.innerHTML = `<div class="flex h-full items-center justify-center rounded-3xl bg-slate-950 p-8 text-center text-white dark:bg-sky-500 dark:text-slate-950"><div><p class="text-6xl font-bold">${widget.kpi_value}</p><p class="mt-3 text-sm">${widget.metric_label || ""}</p></div></div>`;
+                }
+                modal.classList.remove("hidden");
+            });
+        });
+
+        const dashboardModalClose = document.getElementById("dashboard-chart-modal-close");
+        if (dashboardModalClose) {
+            dashboardModalClose.addEventListener("click", () => {
+                modal.classList.add("hidden");
+                modalSurface.innerHTML = "";
+            });
+        }
+
+        window.addEventListener("resize", () => {
+            Object.keys(chartInstances).forEach((rowKey) => resizeRenderedWidget(rowKey));
+        });
+    </script>
+{% endblock %}

@@ -1,4 +1,5 @@
 {% extends "tracker/base.html" %}
+{% load tracker_extras %}
 
 {% block title %}{{ page_title }} | Job Tracker{% endblock %}
 
@@ -10,7 +11,10 @@
                 <h2 class="mt-2 text-3xl font-bold tracking-tight dark:text-slate-100">{{ page_title }}</h2>
                 <p class="mt-3 text-sm text-slate-600 dark:text-slate-300">{{ page_description }}</p>
             </div>
-            <a href="{% if table.slug == 'to-apply' %}{% url 'to_apply_list' %}{% elif table.slug == 'applied' %}{% url 'applied_list' %}{% else %}{% url 'workspace_table' table.slug %}{% endif %}" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Back</a>
+            <div class="flex flex-wrap gap-3 sm:justify-end">
+                <button form="record-form" class="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400" type="submit">{% if is_edit %}Save changes{% else %}Create entry{% endif %}</button>
+                <a href="{{ return_url }}" class="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Cancel</a>
+            </div>
         </div>
 
         {% if table.slug == 'dashboard' %}
@@ -22,12 +26,19 @@
             </div>
         {% endif %}
 
-        <form method="post" class="mt-8 space-y-6">
+        <form id="record-form" method="post" class="mt-8 space-y-6">
             {% csrf_token %}
             {% for field in form %}
                 <div class="rounded-3xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-700 dark:bg-slate-950/60">
                     <label class="text-sm font-semibold text-slate-800 dark:text-slate-100" for="{{ field.id_for_label }}">{{ field.label }}</label>
                     <div>{{ field }}</div>
+                    {% if field.name == 'tags' and available_job_tags %}
+                        <div class="mt-3 flex flex-wrap gap-2">
+                            {% for tag_name in available_job_tags %}
+                                <span class="inline-flex rounded-full px-3 py-1 text-xs font-medium {{ tag_name|status_chip_classes }}">{{ tag_name }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
                     {% if field.name == 'url' %}
                         <p id="url-inference-status" class="mt-2 text-xs text-slate-500 dark:text-slate-400">Paste a job link and the form will try to infer role, source, type, and notes.</p>
                     {% endif %}
@@ -41,7 +52,7 @@
             {% endfor %}
             <div class="flex flex-wrap gap-3">
                 <button class="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400" type="submit">{% if is_edit %}Save changes{% else %}Create entry{% endif %}</button>
-                <a href="{% if table.slug == 'to-apply' %}{% url 'to_apply_list' %}{% elif table.slug == 'applied' %}{% url 'applied_list' %}{% else %}{% url 'workspace_table' table.slug %}{% endif %}" class="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Cancel</a>
+                <a href="{{ return_url }}" class="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Cancel</a>
             </div>
         </form>
     </section>
@@ -51,7 +62,7 @@
             const sourceSelect = document.getElementById("id_source_row_key");
             const sourceRecords = JSON.parse("{{ source_records_json|escapejs }}");
             const sourceMap = Object.fromEntries(sourceRecords.map((item) => [item.row_key, item.values]));
-            const targetFields = ["role-title", "url", "type"];
+            const targetFields = ["role-title", "url", "type", "deadline", "number-of-positions"];
 
             if (sourceSelect) {
                 sourceSelect.addEventListener("change", (event) => {

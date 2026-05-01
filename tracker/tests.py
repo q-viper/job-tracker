@@ -12,10 +12,33 @@ from django.urls import reverse
 from openpyxl import Workbook, load_workbook
 
 from .chat_handler import ChatHandler
-from .models import ChatModelConfig, DynamicColumn, DynamicTable, PortalJobSuggestion
+from .models import (
+    ApplicationHistoryEvent,
+    ApplicationTag,
+    ApplicationTagAssignment,
+    ChatModelConfig,
+    DashboardBoard,
+    DashboardBoardItem,
+    DashboardPanelPreference,
+    DynamicColumn,
+    DynamicTable,
+    PortalJobSuggestion,
+)
 from .notifications import run_notifications
 from .rag import chat_with_rag
-from .services import aggregate_records, get_records, move_to_applied, save_record, scrape_jobs_from_portal
+from .services import (
+    aggregate_records,
+    build_applied_flow_chart,
+    build_dashboard,
+    delete_record,
+    ensure_user_workspace,
+    get_records,
+    move_to_applied,
+    save_record,
+    scrape_jobs_from_portal,
+    seed_sample_jobs_for_user,
+    sync_application_tags,
+)
 from .views import ToApplyListView
 
 
@@ -148,6 +171,140 @@ class DynamicRecordServiceTests(TestCase):
         self.assertEqual(applied_records[0].values["role-title"], "Vision PhD")
         self.assertEqual(applied_records[0].values["application-progress"], "Applied")
 
+    def test_delete_record_removes_job_history_and_tag_assignments(self):
+        row_key = save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Vision PhD",
+                "url": "https://example.com/phd",
+                "type": "PhD",
+            },
+        )
+        sync_application_tags(self.user, "to-apply", row_key, ["Priority", "Dummy"])
+
+        delete_record(self.to_apply, self.user, row_key)
+
+        self.assertFalse(
+            ApplicationHistoryEvent.objects.filter(
+                user=self.user,
+                table_slug="to-apply",
+                record_row_key=row_key,
+            ).exists()
+        )
+        self.assertFalse(
+            ApplicationTagAssignment.objects.filter(
+                user=self.user,
+                table_slug="to-apply",
+                record_row_key=row_key,
+            ).exists()
+        )
+
+    def test_move_to_applied_preserves_tags_and_history_on_same_row_key(self):
+        source_row_key = save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Vision PhD",
+                "url": "https://example.com/phd",
+                "type": "PhD",
+            },
+        )
+        sync_application_tags(self.user, "to-apply", source_row_key, ["Priority", "Dummy"])
+
+        moved_row_key = move_to_applied(
+            user=self.user,
+            applied_table=self.applied,
+            to_apply_table=self.to_apply,
+            values={"date": "2026-04-29"},
+            source_row_key=source_row_key,
+        )
+
+        self.assertEqual(moved_row_key, source_row_key)
+        self.assertEqual(len(get_records(self.to_apply, self.user)), 0)
+        applied_record = get_records(self.applied, self.user)[0]
+        self.assertEqual(applied_record.row_key, source_row_key)
+        self.assertCountEqual(
+            list(
+                ApplicationTagAssignment.objects.filter(
+                    user=self.user,
+                    table_slug="applied",
+                    record_row_key=source_row_key,
+                ).values_list("tag__name", flat=True)
+            ),
+            ["Priority", "Dummy"],
+        )
+        history = list(
+            ApplicationHistoryEvent.objects.filter(
+                user=self.user,
+                table_slug="applied",
+                record_row_key=source_row_key,
+            ).order_by("occurred_at", "id")
+        )
+        self.assertEqual(history[0].to_stage, "To Apply")
+        self.assertEqual(history[-1].to_stage, "Applied")
+
+    def test_move_to_applied_preserves_deadline_when_applied_tracks_it(self):
+        tables = ensure_user_workspace(self.user)
+        source_row_key = save_record(
+            tables["to-apply"],
+            self.user,
+            {
+                "role-title": "Deadline Role",
+                "url": "https://example.com/deadline-role",
+                "type": "Job",
+                "deadline": "2026-05-15",
+            },
+        )
+
+        move_to_applied(
+            user=self.user,
+            applied_table=tables["applied"],
+            to_apply_table=tables["to-apply"],
+            values={"date": "2026-05-01"},
+            source_row_key=source_row_key,
+        )
+
+        applied_record = next(record for record in get_records(tables["applied"], self.user) if record.row_key == source_row_key)
+        self.assertEqual(applied_record.values["deadline"], "2026-05-15")
+
+    def test_applied_progress_change_creates_history_event(self):
+        row_key = save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-29",
+                "role-title": "Vision PhD",
+                "url": "https://example.com/phd",
+                "type": "PhD",
+                "application-progress": "Applied",
+            },
+        )
+
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-29",
+                "role-title": "Vision PhD",
+                "url": "https://example.com/phd",
+                "type": "PhD",
+                "application-progress": "Interview",
+            },
+            row_key=row_key,
+        )
+
+        history = list(
+            ApplicationHistoryEvent.objects.filter(
+                user=self.user,
+                table_slug="applied",
+                record_row_key=row_key,
+            ).order_by("occurred_at", "id")
+        )
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[-1].from_stage, "Applied")
+        self.assertEqual(history[-1].to_stage, "Interview")
+
     def test_to_apply_list_shows_move_to_applied_button(self):
         source_row_key = save_record(
             self.to_apply,
@@ -189,6 +346,362 @@ class DynamicRecordServiceTests(TestCase):
         self.assertEqual(len(applied_records), 1)
         self.assertEqual(applied_records[0].values["role-title"], "Vision PhD")
         self.assertEqual(applied_records[0].values["application-progress"], "Applied")
+
+    def test_job_detail_view_shows_history_and_tags(self):
+        row_key = save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-29",
+                "role-title": "Vision PhD",
+                "url": "https://example.com/phd",
+                "type": "PhD",
+                "application-progress": "Interview",
+            },
+        )
+        sync_application_tags(self.user, "applied", row_key, ["Priority", "PhD"])
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("applied_detail", args=[row_key]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Progress Timeline")
+        self.assertContains(response, "Priority")
+        self.assertContains(response, "Applied")
+
+    def test_dashboard_cards_link_to_job_detail_pages(self):
+        to_apply_row_key = save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Future PhD",
+                "url": "https://example.com/future-phd",
+                "type": "PhD",
+                "deadline": "2026-05-10",
+            },
+        )
+        applied_row_key = save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-29",
+                "role-title": "Vision PhD",
+                "url": "https://example.com/phd",
+                "type": "PhD",
+                "application-progress": "Applied",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("dashboard"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse("to_apply_detail", args=[to_apply_row_key]))
+        self.assertContains(response, reverse("applied_detail", args=[applied_row_key]))
+
+    def test_bulk_to_apply_actions_can_add_tags_and_move_selected_rows(self):
+        first_row_key = save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Role One",
+                "url": "https://example.com/one",
+                "type": "Job",
+            },
+        )
+        second_row_key = save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Role Two",
+                "url": "https://example.com/two",
+                "type": "PhD",
+            },
+        )
+        self.client.force_login(self.user)
+
+        add_tags_response = self.client.post(
+            reverse("to_apply_bulk"),
+            data={
+                "bulk_action": "add_tags",
+                "bulk_tags": "Priority, Dummy",
+                "selected_row_keys": [str(first_row_key), str(second_row_key)],
+            },
+        )
+        self.assertEqual(add_tags_response.status_code, 302)
+        self.assertEqual(
+            ApplicationTagAssignment.objects.filter(user=self.user, table_slug="to-apply").count(),
+            4,
+        )
+
+        move_response = self.client.post(
+            reverse("to_apply_bulk"),
+            data={
+                "bulk_action": "move_to_applied",
+                "selected_row_keys": [str(first_row_key), str(second_row_key)],
+            },
+        )
+        self.assertEqual(move_response.status_code, 302)
+        self.assertEqual(len(get_records(self.to_apply, self.user)), 0)
+        self.assertEqual(len(get_records(self.applied, self.user)), 2)
+        self.assertEqual(
+            ApplicationTagAssignment.objects.filter(user=self.user, table_slug="applied").count(),
+            4,
+        )
+
+    def test_applied_bulk_action_can_remove_tags(self):
+        row_key = save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-29",
+                "role-title": "Vision PhD",
+                "url": "https://example.com/phd",
+                "type": "PhD",
+                "application-progress": "Applied",
+            },
+        )
+        sync_application_tags(self.user, "applied", row_key, ["Priority", "PhD"])
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("applied_bulk"),
+            data={
+                "bulk_action": "remove_tags",
+                "bulk_tags": "Priority",
+                "selected_row_keys": [str(row_key)],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertCountEqual(
+            list(
+                ApplicationTagAssignment.objects.filter(
+                    user=self.user,
+                    table_slug="applied",
+                    record_row_key=row_key,
+                ).values_list("tag__name", flat=True)
+            ),
+            ["PhD"],
+        )
+
+    def test_seed_sample_jobs_for_user_creates_history_ready_demo_records(self):
+        seed_sample_jobs_for_user(self.user)
+
+        applied_records = get_records(self.applied, self.user)
+        to_apply_records = get_records(self.to_apply, self.user)
+        self.assertEqual(len(applied_records), 5)
+        self.assertEqual(len(to_apply_records), 0)
+        self.assertTrue(ApplicationTag.objects.filter(user=self.user, name="Dummy").exists())
+        self.assertTrue(all(record.values.get("number-of-positions") for record in applied_records))
+        self.assertTrue(all(record.values.get("deadline") for record in applied_records))
+
+        flow_chart = build_applied_flow_chart(applied_records, self.user)
+        sankey_data = flow_chart["chart_config"]["data"][0]
+        self.assertIn("To Apply", "".join(sankey_data["node"]["label"]))
+        self.assertTrue(sankey_data["link"]["value"])
+
+    def test_dashboard_includes_stage_timing_and_deadline_lead_widgets(self):
+        ensure_user_workspace(self.user)
+        seed_sample_jobs_for_user(self.user)
+
+        dashboard_payload = build_dashboard(self.user)
+        widgets = {widget.template_key: widget for widget in dashboard_payload["dashboard_widgets"]}
+
+        self.assertIn("applied-stage-timing", widgets)
+        self.assertIn("applied-deadline-lead", widgets)
+        self.assertIn("Applied", widgets["applied-stage-timing"].chart_config["labels"])
+        self.assertTrue(widgets["applied-stage-timing"].chart_config["datasets"][0]["data"])
+        self.assertEqual(
+            sum(widgets["applied-deadline-lead"].chart_config["datasets"][0]["data"]),
+            5,
+        )
+        self.assertIn("Applied late", widgets["applied-deadline-lead"].chart_config["labels"])
+
+    def test_build_dashboard_includes_default_panel_layout(self):
+        ensure_user_workspace(self.user)
+
+        payload = build_dashboard(self.user)
+
+        self.assertEqual(
+            [panel["key"] for panel in payload["dashboard_panel_layout"]["left"]],
+            ["stage-breakdown", "quick-actions", "plot-templates"],
+        )
+        self.assertEqual(
+            [panel["key"] for panel in payload["dashboard_panel_layout"]["main"]],
+            ["metrics-strip", "widget-canvas"],
+        )
+        self.assertEqual(
+            [panel["key"] for panel in payload["dashboard_panel_layout"]["right"]],
+            ["hidden-widgets", "upcoming-deadlines", "recent-submissions"],
+        )
+
+    def test_dashboard_customize_view_updates_panel_visibility(self):
+        ensure_user_workspace(self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("dashboard_customize"),
+            data={"zone_stage-breakdown": "hidden"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        preference = DashboardPanelPreference.objects.get(user=self.user, panel_key="stage-breakdown")
+        self.assertEqual(preference.zone, "hidden")
+
+        dashboard_response = self.client.get(reverse("dashboard"))
+        self.assertNotContains(dashboard_response, "Current progress mix")
+
+    def test_build_dashboard_creates_default_saved_boards(self):
+        ensure_user_workspace(self.user)
+
+        payload = build_dashboard(self.user)
+
+        self.assertEqual(DashboardBoard.objects.filter(user=self.user).count(), 3)
+        self.assertEqual([board.name for board in payload["dashboard_boards"]], ["Home Lens", "Pipeline Lab", "Deadline Radar"])
+        self.assertEqual(payload["selected_homepage_board"].name, "Home Lens")
+        self.assertTrue(payload["selected_homepage_widgets"])
+
+    def test_dashboard_boards_page_lists_saved_boards(self):
+        ensure_user_workspace(self.user)
+        build_dashboard(self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("dashboard_boards"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Saved boards for home and deep work")
+        self.assertContains(response, "Home Lens")
+        self.assertContains(response, "Pipeline Lab")
+
+    def test_dashboard_designer_view_is_separate_from_homepage(self):
+        ensure_user_workspace(self.user)
+        dashboard_payload = build_dashboard(self.user)
+        board = dashboard_payload["dashboard_boards"][0]
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("dashboard_designer", args=[board.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Drag cards by the dotted handle")
+        self.assertContains(response, "Save board settings")
+        self.assertContains(response, board.name)
+
+        homepage = self.client.get(reverse("dashboard"))
+        self.assertNotContains(homepage, "Drag cards by the dotted handle")
+        self.assertContains(homepage, "A cleaner home for the dashboards you saved")
+
+    def test_dashboard_board_item_api_can_add_update_and_remove_widget_layout(self):
+        ensure_user_workspace(self.user)
+        dashboard_payload = build_dashboard(self.user)
+        board = dashboard_payload["dashboard_boards"][0]
+        existing_item_count = DashboardBoardItem.objects.filter(board=board).count()
+        self.client.force_login(self.user)
+
+        create_response = self.client.post(
+            reverse("api_dashboard_board_items", args=[board.id]),
+            data=json.dumps({"template_key": "applied-outcomes-waterfall"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(create_response.status_code, 201)
+        created_widget = create_response.json()["widget"]
+        created_item = DashboardBoardItem.objects.get(board=board, id=created_widget["layout_item_id"])
+        self.assertEqual(DashboardBoardItem.objects.filter(board=board).count(), existing_item_count + 1)
+
+        update_response = self.client.generic(
+            "PATCH",
+            reverse("api_dashboard_board_item_detail", args=[board.id, created_item.id]),
+            data=json.dumps({"card_size": "Full", "chart_height": "XL", "sort_order": 95}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(update_response.status_code, 200)
+        created_item.refresh_from_db()
+        self.assertEqual(created_item.card_size, "Full")
+        self.assertEqual(created_item.chart_height, "XL")
+        self.assertEqual(created_item.sort_order, 95)
+
+        delete_response = self.client.delete(reverse("api_dashboard_board_item_detail", args=[board.id, created_item.id]))
+
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertFalse(DashboardBoardItem.objects.filter(board=board, id=created_item.id).exists())
+
+    def test_previewing_an_empty_saved_board_stays_empty(self):
+        ensure_user_workspace(self.user)
+        build_dashboard(self.user)
+        empty_board = DashboardBoard.objects.create(
+            user=self.user,
+            name="Empty Board",
+            description="No plots yet.",
+            show_on_homepage=True,
+            sort_order=99,
+        )
+        self.client.force_login(self.user)
+
+        payload = build_dashboard(self.user, selected_board_id=empty_board.id)
+        response = self.client.get(reverse("dashboard"), {"board": empty_board.id})
+
+        self.assertEqual(payload["selected_homepage_board"], empty_board)
+        self.assertEqual(payload["selected_homepage_widgets"], [])
+        self.assertContains(response, "This board does not have any saved plots yet.")
+
+    def test_workspace_bootstrap_adds_number_of_positions_to_job_tables(self):
+        tables = ensure_user_workspace(self.user)
+
+        to_apply_column = tables["to-apply"].columns.get(slug="number-of-positions")
+        applied_column = tables["applied"].columns.get(slug="number-of-positions")
+
+        self.assertEqual(to_apply_column.data_type, DynamicColumn.DataType.NUMBER)
+        self.assertEqual(applied_column.data_type, DynamicColumn.DataType.NUMBER)
+        self.assertEqual(
+            tables["applied"].columns.get(slug="deadline").data_type,
+            DynamicColumn.DataType.DATE,
+        )
+
+    def test_job_forms_show_number_of_positions_field(self):
+        self.client.force_login(self.user)
+
+        to_apply_response = self.client.get(reverse("to_apply_create"))
+        applied_response = self.client.get(reverse("applied_create"))
+
+        self.assertEqual(to_apply_response.status_code, 200)
+        self.assertEqual(applied_response.status_code, 200)
+        self.assertContains(to_apply_response, "Number of Positions")
+        self.assertContains(to_apply_response, 'name="number-of-positions"')
+        self.assertContains(applied_response, "Number of Positions")
+        self.assertContains(applied_response, 'name="number-of-positions"')
+
+    def test_to_apply_list_supports_tag_filter_and_sort_option(self):
+        first_row_key = save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Alpha Role",
+                "url": "https://example.com/alpha",
+                "type": "Job",
+            },
+        )
+        second_row_key = save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Beta Role",
+                "url": "https://example.com/beta",
+                "type": "PhD",
+            },
+        )
+        sync_application_tags(self.user, "to-apply", first_row_key, ["Priority"])
+        sync_application_tags(self.user, "to-apply", second_row_key, ["Dummy"])
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("to_apply_list"), {"sort": "tags", "dir": "asc", "tag": "priority"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Tags")
+        self.assertContains(response, 'name="tag"')
+        self.assertContains(response, "Alpha Role")
+        self.assertNotContains(response, "Beta Role")
 
     def test_rag_returns_matching_records_from_user_tables(self):
         save_record(

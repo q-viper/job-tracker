@@ -10,7 +10,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import LoginView
-from django.http import Http404, HttpResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -21,7 +21,9 @@ from django.views.generic import FormView, TemplateView
 from .forms import (
     AccountSettingsForm,
     AppliedCreateForm,
+    AppliedUpdateForm,
     ColumnDefinitionForm,
+    DashboardBoardForm,
     DynamicRecordForm,
     EmailAwareAuthenticationForm,
     SignupForm,
@@ -30,28 +32,48 @@ from .forms import (
     WorkbookImportForm,
 )
 from .email_verification import send_verification_email, verify_user_from_token
-from .models import DynamicTable, PortalJobSuggestion
+from .models import (
+    ApplicationTag,
+    DashboardBoard,
+    DashboardBoardItem,
+    DashboardPanelPreference,
+    DynamicTable,
+    PortalJobSuggestion,
+)
 from .services import (
+    add_application_tags,
+    add_dashboard_widget_to_board,
     add_portal_job_to_to_apply,
     build_export_workbook,
+    build_application_history_timeline,
+    build_dashboard_board_widgets,
     build_dashboard,
+    dashboard_panel_catalog,
     count_records,
     dashboard_template_initial_values,
     default_sort_direction_for_field,
     default_sort_field_for_table,
     delete_record,
     default_portal_keywords_text,
+    ensure_dashboard_widget_from_template,
     ensure_user_workspace,
+    ensure_dashboard_panel_preferences,
     get_record,
     get_records,
+    get_application_tags,
+    get_application_tags_map,
     get_user_table,
+    infer_progress,
     import_workbook_for_user,
     make_unique_column_slug,
     make_unique_table_slug,
     move_to_applied,
+    parse_tag_names,
     refresh_all_portal_jobs_for_user,
     refresh_portal_jobs,
+    remove_application_tags,
     save_record,
+    sync_application_tags,
     sort_records_with_field,
 )
 from .notifications import build_email_body, send_notification_to_user, upcoming_deadlines_for_user
@@ -63,6 +85,36 @@ class WorkspaceReadyMixin:
         workbook = Path(settings.BASE_DIR) / "Applications.xlsx"
         ensure_user_workspace(request.user, workbook if workbook.exists() else None)
         return super().dispatch(request, *args, **kwargs)
+
+
+def serialize_dashboard_widget(widget) -> dict[str, object]:
+    return {
+        "row_key": str(widget.row_key),
+        "layout_item_id": widget.layout_item_id,
+        "title": widget.title,
+        "template_key": widget.template_key,
+        "chart_type": widget.chart_type,
+        "accent": widget.accent,
+        "notes": widget.notes,
+        "metric_label": widget.metric_label,
+        "source_table": widget.source_table,
+        "group_by_column": widget.group_by_column,
+        "metric_column": widget.metric_column,
+        "aggregation": widget.aggregation,
+        "filters": widget.filters,
+        "labels": widget.labels,
+        "values": widget.values,
+        "chart_config": widget.chart_config,
+        "kpi_value": widget.kpi_value,
+        "table_columns": widget.table_columns,
+        "show_on_dashboard": widget.show_on_dashboard,
+        "sort_order": widget.sort_order,
+        "card_size": widget.card_size,
+        "chart_height": widget.chart_height,
+        "grid_span": widget.grid_span,
+        "chart_height_px": widget.chart_height_px,
+        "edit_url": reverse("workspace_record_edit", args=["dashboard", widget.row_key]),
+    }
 
 
 class AuthLoginView(LoginView):
@@ -130,41 +182,26 @@ class DashboardView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        dashboard_payload = build_dashboard(self.request.user)
+        selected_board_id = self.request.GET.get("board")
+        try:
+            parsed_board_id = int(selected_board_id) if selected_board_id else None
+        except ValueError:
+            parsed_board_id = None
+        dashboard_payload = build_dashboard(self.request.user, selected_board_id=parsed_board_id)
         context.update(dashboard_payload)
         context["nav_section"] = "dashboard"
         context["dashboard_create_url"] = reverse("workspace_record_create", args=["dashboard"])
         context["dashboard_manage_url"] = reverse("workspace_table", args=["dashboard"])
+        context["dashboard_customize_url"] = reverse("dashboard_customize")
+        context["dashboard_boards_url"] = reverse("dashboard_boards")
+        context["dashboard_widgets"] = dashboard_payload["selected_homepage_widgets"]
+        context["dashboard_designer_url"] = (
+            reverse("dashboard_designer", args=[dashboard_payload["selected_homepage_board"].id])
+            if dashboard_payload["selected_homepage_board"]
+            else ""
+        )
         context["dashboard_widgets_json"] = json.dumps(
-            [
-                {
-                    "row_key": str(widget.row_key),
-                    "title": widget.title,
-                    "template_key": widget.template_key,
-                    "chart_type": widget.chart_type,
-                    "accent": widget.accent,
-                    "notes": widget.notes,
-                    "metric_label": widget.metric_label,
-                    "source_table": widget.source_table,
-                    "group_by_column": widget.group_by_column,
-                    "metric_column": widget.metric_column,
-                    "aggregation": widget.aggregation,
-                    "filters": widget.filters,
-                    "labels": widget.labels,
-                    "values": widget.values,
-                    "chart_config": widget.chart_config,
-                    "kpi_value": widget.kpi_value,
-                    "table_columns": widget.table_columns,
-                    "show_on_dashboard": widget.show_on_dashboard,
-                    "sort_order": widget.sort_order,
-                    "card_size": widget.card_size,
-                    "chart_height": widget.chart_height,
-                    "grid_span": widget.grid_span,
-                    "chart_height_px": widget.chart_height_px,
-                    "edit_url": reverse("workspace_record_edit", args=["dashboard", widget.row_key]),
-                }
-                for widget in [*dashboard_payload["dashboard_widgets"], *dashboard_payload["hidden_dashboard_widgets"]]
-            ]
+            [serialize_dashboard_widget(widget) for widget in dashboard_payload["selected_homepage_widgets"]]
         )
         context["dashboard_templates"] = [
             {
@@ -178,6 +215,256 @@ class DashboardView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
         return context
 
 
+class DashboardCustomizeView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
+    template_name = "tracker/dashboard_customize.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        ensure_dashboard_panel_preferences(self.request.user)
+        catalog = dashboard_panel_catalog()
+        preferences = list(
+            DashboardPanelPreference.objects.filter(user=self.request.user).order_by("zone", "sort_order", "panel_key")
+        )
+        context.update(
+            {
+                "nav_section": "dashboard",
+                "dashboard_url": reverse("dashboard"),
+                "panel_zone_choices": DashboardPanelPreference.Zone.choices,
+                "panel_preferences": [
+                    {
+                        **catalog.get(preference.panel_key, {"key": preference.panel_key, "label": preference.panel_key.title()}),
+                        "zone": preference.zone,
+                        "sort_order": preference.sort_order,
+                    }
+                    for preference in preferences
+                ],
+            }
+        )
+        return context
+
+    def post(self, request, *args, **kwargs):
+        ensure_dashboard_panel_preferences(request.user)
+        allowed_zones = {choice[0] for choice in DashboardPanelPreference.Zone.choices}
+        preferences = {
+            preference.panel_key: preference
+            for preference in DashboardPanelPreference.objects.filter(user=request.user)
+        }
+        for panel in dashboard_panel_catalog().values():
+            preference = preferences.get(panel["key"])
+            if preference is None:
+                continue
+            zone = (request.POST.get(f"zone_{panel['key']}") or preference.zone).strip()
+            if zone not in allowed_zones:
+                zone = preference.zone
+            try:
+                sort_order = max(1, int(request.POST.get(f"order_{panel['key']}") or preference.sort_order))
+            except ValueError:
+                sort_order = preference.sort_order
+            changed_fields: list[str] = []
+            if preference.zone != zone:
+                preference.zone = zone
+                changed_fields.append("zone")
+            if preference.sort_order != sort_order:
+                preference.sort_order = sort_order
+                changed_fields.append("sort_order")
+            if changed_fields:
+                preference.save(update_fields=changed_fields + ["updated_at"])
+        messages.success(request, "Dashboard layout updated.")
+        return redirect("dashboard_customize")
+
+
+class DashboardBoardListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
+    template_name = "tracker/dashboard_boards.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        payload = build_dashboard(self.request.user)
+        boards = payload["dashboard_boards"]
+        context.update(
+            {
+                "nav_section": "dashboard",
+                "dashboard_url": reverse("dashboard"),
+                "dashboard_customize_url": reverse("dashboard_customize"),
+                "board_form": kwargs.get("board_form") or DashboardBoardForm(),
+                "board_cards": [
+                    {
+                        "board": board,
+                        "widget_count": board.items.count(),
+                        "designer_url": reverse("dashboard_designer", args=[board.id]),
+                        "preview_url": f"{reverse('dashboard')}?board={board.id}",
+                        "delete_url": reverse("dashboard_board_delete", args=[board.id]),
+                    }
+                    for board in boards
+                ],
+            }
+        )
+        return context
+
+    def post(self, request, *args, **kwargs):
+        form = DashboardBoardForm(request.POST)
+        if form.is_valid():
+            board = form.save(commit=False)
+            board.user = request.user
+            board.sort_order = (
+                DashboardBoard.objects.filter(user=request.user).order_by("-sort_order").values_list("sort_order", flat=True).first()
+                or 0
+            ) + 10
+            board.save()
+            messages.success(request, "Dashboard board created. You can start arranging plots now.")
+            return redirect("dashboard_designer", board.id)
+        return self.render_to_response(self.get_context_data(board_form=form))
+
+
+class DashboardDesignerView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
+    template_name = "tracker/dashboard_designer.html"
+
+    def get_board(self) -> DashboardBoard:
+        return get_object_or_404(
+            DashboardBoard.objects.filter(user=self.request.user).prefetch_related("items"),
+            id=self.kwargs["board_id"],
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        board = self.get_board()
+        payload = build_dashboard(self.request.user)
+        widget_map = {widget.row_key: widget for widget in payload["all_dashboard_widgets"]}
+        board_widgets = build_dashboard_board_widgets(board, widget_map)
+        board_widget_row_keys = {widget.row_key for widget in board_widgets}
+        available_widgets = [
+            widget
+            for widget in payload["all_dashboard_widgets"]
+            if widget.row_key not in board_widget_row_keys
+        ]
+        context.update(
+            {
+                "nav_section": "dashboard",
+                "board": board,
+                "board_form": kwargs.get("board_form") or DashboardBoardForm(instance=board),
+                "dashboard_url": f"{reverse('dashboard')}?board={board.id}",
+                "dashboard_boards_url": reverse("dashboard_boards"),
+                "dashboard_customize_url": reverse("dashboard_customize"),
+                "dashboard_create_url": reverse("workspace_record_create", args=["dashboard"]),
+                "dashboard_manage_url": reverse("workspace_table", args=["dashboard"]),
+                "board_delete_url": reverse("dashboard_board_delete", args=[board.id]),
+                "board_widgets": board_widgets,
+                "board_widgets_json": json.dumps([serialize_dashboard_widget(widget) for widget in board_widgets]),
+                "available_widgets": available_widgets,
+                "available_widgets_json": json.dumps([serialize_dashboard_widget(widget) for widget in available_widgets]),
+                "dashboard_templates": [
+                    {
+                        **item,
+                        "row_key": str(item["row_key"]) if item["row_key"] else "",
+                        "create_url": f"{reverse('workspace_record_create', args=['dashboard'])}?template={item['key']}",
+                        "edit_url": reverse("workspace_record_edit", args=["dashboard", item["row_key"]]) if item["row_key"] else "",
+                        "on_board": any(widget.template_key == item["key"] for widget in board_widgets),
+                    }
+                    for item in payload["dashboard_templates"]
+                ],
+            }
+        )
+        return context
+
+    def post(self, request, *args, **kwargs):
+        board = self.get_board()
+        form = DashboardBoardForm(request.POST, instance=board)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Dashboard board settings updated.")
+            return redirect("dashboard_designer", board.id)
+        return self.render_to_response(self.get_context_data(board_form=form))
+
+
+class DashboardBoardDeleteView(LoginRequiredMixin, WorkspaceReadyMixin, View):
+    def post(self, request, board_id: int):
+        board = get_object_or_404(DashboardBoard, user=request.user, id=board_id)
+        board.delete()
+        messages.success(request, "Dashboard board deleted.")
+        return redirect("dashboard_boards")
+
+
+class DashboardBoardWidgetCollectionView(LoginRequiredMixin, WorkspaceReadyMixin, View):
+    def post(self, request, board_id: int):
+        board = get_object_or_404(DashboardBoard.objects.filter(user=request.user).prefetch_related("items"), id=board_id)
+        try:
+            payload = json.loads(request.body.decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"detail": "Invalid JSON payload."}, status=400)
+
+        widget_row_key = (payload.get("widget_row_key") or "").strip()
+        template_key = (payload.get("template_key") or "").strip()
+        dashboard_table = get_user_table(request.user, "dashboard")
+        if template_key:
+            widget_record = ensure_dashboard_widget_from_template(request.user, dashboard_table, template_key)
+            widget_row_key = str(widget_record.row_key)
+        if not widget_row_key:
+            return JsonResponse({"detail": "widget_row_key or template_key is required."}, status=400)
+
+        board_item = add_dashboard_widget_to_board(
+            board,
+            widget_row_key,
+            card_size=payload.get("card_size") or DashboardBoardItem.CardSize.STANDARD,
+            chart_height=payload.get("chart_height") or DashboardBoardItem.ChartHeight.MEDIUM,
+        )
+        dashboard_payload = build_dashboard(request.user, selected_board_id=board.id)
+        widget_map = {widget.row_key: widget for widget in dashboard_payload["all_dashboard_widgets"]}
+        board_widgets = build_dashboard_board_widgets(board, widget_map)
+        widget = next((item for item in board_widgets if item.layout_item_id == board_item.id), None)
+        if widget is None:
+            return JsonResponse({"detail": "Widget was added but could not be rendered."}, status=500)
+        return JsonResponse({"widget": serialize_dashboard_widget(widget)}, status=201)
+
+
+class DashboardBoardWidgetDetailView(LoginRequiredMixin, WorkspaceReadyMixin, View):
+    def patch(self, request, board_id: int, item_id: int):
+        board = get_object_or_404(DashboardBoard, user=request.user, id=board_id)
+        board_item = get_object_or_404(DashboardBoardItem, board=board, id=item_id)
+        try:
+            payload = json.loads(request.body.decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse({"detail": "Invalid JSON payload."}, status=400)
+
+        allowed_card_sizes = {choice[0] for choice in DashboardBoardItem.CardSize.choices}
+        allowed_chart_heights = {choice[0] for choice in DashboardBoardItem.ChartHeight.choices}
+        changed_fields: list[str] = []
+
+        card_size = (payload.get("card_size") or "").strip()
+        if card_size and card_size in allowed_card_sizes and board_item.card_size != card_size:
+            board_item.card_size = card_size
+            changed_fields.append("card_size")
+
+        chart_height = (payload.get("chart_height") or "").strip()
+        if chart_height and chart_height in allowed_chart_heights and board_item.chart_height != chart_height:
+            board_item.chart_height = chart_height
+            changed_fields.append("chart_height")
+
+        if "sort_order" in payload:
+            try:
+                sort_order = max(1, int(payload.get("sort_order") or board_item.sort_order))
+            except (TypeError, ValueError):
+                sort_order = board_item.sort_order
+            if board_item.sort_order != sort_order:
+                board_item.sort_order = sort_order
+                changed_fields.append("sort_order")
+
+        if changed_fields:
+            board_item.save(update_fields=changed_fields + ["updated_at"])
+
+        dashboard_payload = build_dashboard(request.user, selected_board_id=board.id)
+        widget_map = {widget.row_key: widget for widget in dashboard_payload["all_dashboard_widgets"]}
+        board_widgets = build_dashboard_board_widgets(board, widget_map)
+        widget = next((item for item in board_widgets if item.layout_item_id == board_item.id), None)
+        if widget is None:
+            return JsonResponse({"detail": "Updated layout could not be rendered."}, status=500)
+        return JsonResponse({"widget": serialize_dashboard_widget(widget)})
+
+    def delete(self, request, board_id: int, item_id: int):
+        board = get_object_or_404(DashboardBoard, user=request.user, id=board_id)
+        board_item = get_object_or_404(DashboardBoardItem, board=board, id=item_id)
+        board_item.delete()
+        return JsonResponse({"deleted": True})
+
+
 class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
     template_name = "tracker/table_page.html"
     table_slug = ""
@@ -188,7 +475,51 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
     def get_table(self) -> DynamicTable:
         return get_user_table(self.request.user, self.table_slug)
 
+    def get_detail_url(self, table: DynamicTable, record) -> str:
+        if table.slug == "to-apply":
+            return reverse("to_apply_detail", args=[record.row_key])
+        if table.slug == "applied":
+            return reverse("applied_detail", args=[record.row_key])
+        return ""
+
+    def get_record_tags_map(self, table: DynamicTable, records) -> dict:
+        request_user = getattr(self.request, "user", None)
+        if table.slug not in {"to-apply", "applied"} or request_user is None:
+            return {}
+        return get_application_tags_map(request_user, table.slug, [record.row_key for record in records])
+
+    def get_tag_filter(self, table: DynamicTable) -> str:
+        request_user = getattr(self.request, "user", None)
+        if table.slug not in {"to-apply", "applied"} or request_user is None:
+            return ""
+        requested = (self.request.GET.get("tag") or "").strip()
+        allowed = set(
+            ApplicationTag.objects.filter(user=request_user).values_list("slug", flat=True)
+        )
+        return requested if requested in allowed else ""
+
+    def get_tag_filter_options(self, table: DynamicTable) -> list[dict[str, str]]:
+        request_user = getattr(self.request, "user", None)
+        if table.slug not in {"to-apply", "applied"} or request_user is None:
+            return []
+        return [
+            {"value": tag.slug, "label": tag.name}
+            for tag in ApplicationTag.objects.filter(user=request_user).order_by("name")
+        ]
+
+    def filter_records_for_display(self, records, table: DynamicTable):
+        tag_filter = self.get_tag_filter(table)
+        if not tag_filter:
+            return records
+        tags_map = self.get_record_tags_map(table, records)
+        return [
+            record
+            for record in records
+            if any(tag.slug == tag_filter for tag in tags_map.get(record.row_key, []))
+        ]
+
     def build_rows(self, table: DynamicTable, records):
+        tags_map = self.get_record_tags_map(table, records)
         rows = []
         for record in records:
             if table.slug == "to-apply":
@@ -214,6 +545,8 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
                     "edit_url": edit_url,
                     "delete_url": delete_url,
                     "promote_url": promote_url,
+                    "detail_url": self.get_detail_url(table, record),
+                    "tags": tags_map.get(record.row_key, []),
                     "jobs_url": reverse("portal_jobs", args=[record.row_key]) if table.slug == "portals" else "",
                     "primary_cells": primary_cells,
                     "secondary_cells": secondary_cells,
@@ -223,9 +556,9 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
 
     def priority_slugs(self, table: DynamicTable) -> list[str]:
         if table.slug == "applied":
-            return ["application-progress", "result", "type", "date", "source", "url"]
+            return ["application-progress", "result", "type", "deadline", "number-of-positions", "date", "source", "url"]
         if table.slug == "to-apply":
-            return ["type", "deadline", "source", "english-test", "url"]
+            return ["type", "deadline", "number-of-positions", "source", "english-test", "url"]
         if table.slug == "portals":
             return ["url", "fetch-keywords"]
         return ["type", "status", "date", "url"]
@@ -267,6 +600,8 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
 
     def get_sort_field(self, table: DynamicTable) -> str:
         allowed = {"label", "created_at", "updated_at", *table.columns.filter(is_visible=True).values_list("slug", flat=True)}
+        if table.slug in {"to-apply", "applied"}:
+            allowed.add("tags")
         requested = self.request.GET.get("sort")
         if requested in allowed:
             return requested
@@ -278,13 +613,38 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
             {"value": "created_at", "label": "Created time"},
             {"value": "label", "label": "Title / label"},
         ]
+        if table.slug in {"to-apply", "applied"}:
+            options.append({"value": "tags", "label": "Tags"})
         for column in table.columns.filter(is_visible=True):
             options.append({"value": column.slug, "label": column.name})
         return options
 
     def sort_records_for_display(self, records, table: DynamicTable):
+        filtered_records = self.filter_records_for_display(records, table)
+        if self.get_sort_field(table) == "tags":
+            tags_map = self.get_record_tags_map(table, filtered_records)
+            populated = []
+            missing = []
+            for record in filtered_records:
+                tag_names = [tag.name for tag in tags_map.get(record.row_key, [])]
+                if not tag_names:
+                    missing.append(record)
+                    continue
+                populated.append(
+                    (
+                        ", ".join(sorted(tag_names, key=str.lower)).lower(),
+                        record.label.lower(),
+                        record,
+                    )
+                )
+            ordered = sorted(
+                populated,
+                key=lambda item: (item[0], item[1]),
+                reverse=self.get_sort_direction(table) == "desc",
+            )
+            return [item[2] for item in ordered] + missing
         return sort_records_with_field(
-            records,
+            filtered_records,
             table,
             sort_field=self.get_sort_field(table),
             direction=self.get_sort_direction(table),
@@ -292,6 +652,29 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
 
     def get_extra_actions(self, table: DynamicTable) -> list[dict[str, str]]:
         return []
+
+    def get_bulk_actions(self, table: DynamicTable) -> list[dict[str, str]]:
+        if table.slug == "to-apply":
+            return [
+                {"value": "move_to_applied", "label": "Move to Applied"},
+                {"value": "add_tags", "label": "Add tags"},
+                {"value": "remove_tags", "label": "Remove tags"},
+                {"value": "delete", "label": "Delete selected"},
+            ]
+        if table.slug == "applied":
+            return [
+                {"value": "add_tags", "label": "Add tags"},
+                {"value": "remove_tags", "label": "Remove tags"},
+                {"value": "delete", "label": "Delete selected"},
+            ]
+        return []
+
+    def get_bulk_action_url(self, table: DynamicTable) -> str:
+        if table.slug == "to-apply":
+            return reverse("to_apply_bulk")
+        if table.slug == "applied":
+            return reverse("applied_bulk")
+        return ""
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -311,7 +694,11 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
                 "sort_field": self.get_sort_field(table),
                 "sort_direction": self.get_sort_direction(table),
                 "sort_options": self.get_sort_options(table),
+                "tag_filter": self.get_tag_filter(table),
+                "tag_filter_options": self.get_tag_filter_options(table),
                 "extra_actions": self.get_extra_actions(table),
+                "bulk_actions": self.get_bulk_actions(table),
+                "bulk_action_url": self.get_bulk_action_url(table),
             }
         )
         return context
@@ -392,12 +779,21 @@ class BaseRecordFormView(LoginRequiredMixin, WorkspaceReadyMixin, FormView):
         kwargs = super().get_form_kwargs()
         kwargs["table"] = self.get_table()
         kwargs["user"] = self.request.user
+        kwargs["row_key"] = self.kwargs.get("row_key")
         return kwargs
 
     def get_success_url(self) -> str:
         if self.success_view_name == "workspace_table":
             return reverse(self.success_view_name, args=[self.get_table().slug])
         return reverse(self.success_view_name)
+
+    def get_return_url(self) -> str:
+        table = self.get_table()
+        if table.slug == "to-apply":
+            return reverse("to_apply_list")
+        if table.slug == "applied":
+            return reverse("applied_list")
+        return reverse("workspace_table", args=[table.slug])
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -409,23 +805,42 @@ class BaseRecordFormView(LoginRequiredMixin, WorkspaceReadyMixin, FormView):
                 "page_description": self.page_description or table.description,
                 "nav_section": self.nav_section or table.slug,
                 "is_edit": bool(self.kwargs.get("row_key")),
+                "return_url": self.get_return_url(),
+                "available_job_tags": getattr(context.get("form"), "available_tags", []),
                 "dashboard_columns_json": json.dumps(getattr(context.get("form"), "dashboard_columns_map", {})),
                 "url_inference_api_url": reverse("api_infer_record_from_url"),
             }
         )
         return context
 
+    def sync_form_tags(self, form, row_key) -> None:
+        raw_tags = form.cleaned_data.get("tags")
+        if raw_tags is None:
+            return
+        sync_application_tags(
+            self.request.user,
+            self.get_table().slug,
+            row_key,
+            parse_tag_names(raw_tags),
+        )
+
     def form_valid(self, form):
         table = self.get_table()
         if not table.columns.exists():
             messages.warning(self.request, "Add at least one column before creating records.")
             return redirect("manage_table_columns", table.slug)
-        save_record(
+        payload = {
+            key: value
+            for key, value in form.cleaned_data.items()
+            if key != "tags"
+        }
+        row_uuid = save_record(
             table,
             self.request.user,
-            form.cleaned_data,
+            payload,
             row_key=self.kwargs.get("row_key"),
         )
+        self.sync_form_tags(form, row_uuid)
         messages.success(self.request, f"{table.name} entry saved.")
         return redirect(self.get_success_url())
 
@@ -471,26 +886,186 @@ class AppliedCreateView(BaseRecordFormView):
         payload = {
             key: value
             for key, value in form.cleaned_data.items()
-            if key != "source_row_key"
+            if key not in {"source_row_key", "tags"}
         }
-        move_to_applied(
+        source_row_key = form.cleaned_data.get("source_row_key") or None
+        row_uuid = move_to_applied(
             user=self.request.user,
             applied_table=self.get_table(),
             to_apply_table=get_user_table(self.request.user, "to-apply"),
             values=payload,
-            source_row_key=form.cleaned_data.get("source_row_key") or None,
+            source_row_key=source_row_key,
         )
+        raw_tags = form.cleaned_data.get("tags") or ""
+        if raw_tags.strip() or not source_row_key:
+            sync_application_tags(
+                self.request.user,
+                self.get_table().slug,
+                row_uuid,
+                parse_tag_names(raw_tags),
+            )
         messages.success(self.request, "Applied entry saved.")
         return redirect(self.get_success_url())
 
 
 class AppliedUpdateView(BaseRecordFormView):
     table_slug = "applied"
-    form_class = DynamicRecordForm
+    form_class = AppliedUpdateForm
     success_view_name = "applied_list"
     page_title = "Edit Applied Entry"
     page_description = "Update progress, results, cover letter text, or CV text."
     nav_section = "applied"
+
+
+class BaseJobDetailView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
+    template_name = "tracker/job_detail.html"
+    table_slug = ""
+    nav_section = ""
+
+    def get_table(self) -> DynamicTable:
+        return get_user_table(self.request.user, self.table_slug)
+
+    def get_record(self):
+        record = get_record(self.get_table(), self.request.user, self.kwargs["row_key"])
+        if not record:
+            raise Http404("Job entry not found.")
+        return record
+
+    def get_back_url(self) -> str:
+        if self.table_slug == "to-apply":
+            return reverse("to_apply_list")
+        return reverse("applied_list")
+
+    def get_edit_url(self, row_key) -> str:
+        if self.table_slug == "to-apply":
+            return reverse("to_apply_edit", args=[row_key])
+        return reverse("applied_edit", args=[row_key])
+
+    def get_delete_url(self, row_key) -> str:
+        if self.table_slug == "to-apply":
+            return reverse("to_apply_delete", args=[row_key])
+        return reverse("applied_delete", args=[row_key])
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        table = self.get_table()
+        record = self.get_record()
+        timeline_items, timeline_plot = build_application_history_timeline(
+            self.request.user,
+            table.slug,
+            record,
+        )
+        context.update(
+            {
+                "table": table,
+                "record": record,
+                "record_tags": get_application_tags(self.request.user, table.slug, record.row_key),
+                "timeline_items": timeline_items,
+                "timeline_plot_json": json.dumps(timeline_plot),
+                "nav_section": self.nav_section or table.slug,
+                "back_url": self.get_back_url(),
+                "edit_url": self.get_edit_url(record.row_key),
+                "delete_url": self.get_delete_url(record.row_key),
+                "current_stage": "To Apply" if table.slug == "to-apply" else infer_progress(record),
+                "external_url": record.values.get("url", ""),
+            }
+        )
+        return context
+
+
+class ToApplyDetailView(BaseJobDetailView):
+    table_slug = "to-apply"
+    nav_section = "to-apply"
+
+
+class AppliedDetailView(BaseJobDetailView):
+    table_slug = "applied"
+    nav_section = "applied"
+
+
+class BaseBulkJobActionView(LoginRequiredMixin, WorkspaceReadyMixin, View):
+    table_slug = ""
+
+    def get_table(self) -> DynamicTable:
+        return get_user_table(self.request.user, self.table_slug)
+
+    def get_success_url(self) -> str:
+        if self.table_slug == "to-apply":
+            return reverse("to_apply_list")
+        return reverse("applied_list")
+
+    def get_redirect_response(self, request):
+        redirect_to = (request.POST.get("next") or "").strip()
+        if redirect_to and url_has_allowed_host_and_scheme(
+            url=redirect_to,
+            allowed_hosts={request.get_host()},
+            require_https=request.is_secure(),
+        ):
+            return redirect(redirect_to)
+        return redirect(self.get_success_url())
+
+    def post(self, request):
+        table = self.get_table()
+        row_keys = [item for item in request.POST.getlist("selected_row_keys") if item]
+        if not row_keys:
+            messages.warning(request, "Select at least one item first.")
+            return self.get_redirect_response(request)
+
+        action = (request.POST.get("bulk_action") or "").strip()
+        tag_names = parse_tag_names(request.POST.get("bulk_tags") or "")
+        processed = 0
+
+        if action == "delete":
+            for row_key in row_keys:
+                delete_record(table, request.user, row_key)
+                processed += 1
+            messages.success(request, f"Deleted {processed} selected item(s).")
+            return self.get_redirect_response(request)
+
+        if action == "move_to_applied" and table.slug == "to-apply":
+            applied_table = get_user_table(request.user, "applied")
+            for row_key in row_keys:
+                move_to_applied(
+                    user=request.user,
+                    applied_table=applied_table,
+                    to_apply_table=table,
+                    values={},
+                    source_row_key=row_key,
+                )
+                processed += 1
+            messages.success(request, f"Moved {processed} selected item(s) to Applied.")
+            return self.get_redirect_response(request)
+
+        if action == "add_tags":
+            if not tag_names:
+                messages.error(request, "Enter at least one tag to add.")
+                return self.get_redirect_response(request)
+            for row_key in row_keys:
+                add_application_tags(request.user, table.slug, row_key, tag_names)
+                processed += 1
+            messages.success(request, f"Added tags to {processed} selected item(s).")
+            return self.get_redirect_response(request)
+
+        if action == "remove_tags":
+            if not tag_names:
+                messages.error(request, "Enter at least one tag to remove.")
+                return self.get_redirect_response(request)
+            for row_key in row_keys:
+                remove_application_tags(request.user, table.slug, row_key, tag_names)
+                processed += 1
+            messages.success(request, f"Removed tags from {processed} selected item(s).")
+            return self.get_redirect_response(request)
+
+        messages.error(request, "That bulk action is not available here.")
+        return self.get_redirect_response(request)
+
+
+class ToApplyBulkActionView(BaseBulkJobActionView):
+    table_slug = "to-apply"
+
+
+class AppliedBulkActionView(BaseBulkJobActionView):
+    table_slug = "applied"
 
 
 class WorkspaceRecordCreateView(BaseRecordFormView):

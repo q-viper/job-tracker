@@ -7,6 +7,7 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
 
 
 class User(AbstractUser):
@@ -185,6 +186,201 @@ class PortalJobSuggestion(models.Model):
 
     def __str__(self) -> str:
         return f"{self.portal_name or self.portal_url} -> {self.title}"
+
+
+class ApplicationTag(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="application_tags",
+    )
+    name = models.CharField(max_length=80)
+    slug = models.SlugField(max_length=80)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("name", "id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "slug"),
+                name="unique_application_tag_slug_per_user",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user.username} -> {self.name}"
+
+
+class ApplicationTagAssignment(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="application_tag_assignments",
+    )
+    tag = models.ForeignKey(
+        ApplicationTag,
+        on_delete=models.CASCADE,
+        related_name="assignments",
+    )
+    table_slug = models.SlugField(max_length=120)
+    record_row_key = models.UUIDField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("tag__name", "id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "tag", "table_slug", "record_row_key"),
+                name="unique_application_tag_assignment",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("user", "table_slug", "record_row_key")),
+        ]
+
+    def clean(self) -> None:
+        if self.tag_id and self.user_id and self.tag.user_id != self.user_id:
+            raise ValidationError("Tag assignments must belong to the tag owner.")
+
+    def __str__(self) -> str:
+        return f"{self.tag.name} -> {self.table_slug}:{self.record_row_key}"
+
+
+class ApplicationHistoryEvent(models.Model):
+    class EventType(models.TextChoices):
+        ADDED_TO_APPLY = "added_to_apply", "Added to To Apply"
+        APPLIED = "applied", "Applied"
+        STAGE_CHANGE = "stage_change", "Stage Change"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="application_history_events",
+    )
+    table_slug = models.SlugField(max_length=120)
+    record_row_key = models.UUIDField(db_index=True)
+    event_type = models.CharField(max_length=40, choices=EventType.choices)
+    from_stage = models.CharField(max_length=120, blank=True)
+    to_stage = models.CharField(max_length=120, blank=True)
+    occurred_at = models.DateTimeField(default=timezone.now)
+    notes = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("occurred_at", "id")
+        indexes = [
+            models.Index(fields=("user", "table_slug", "record_row_key", "occurred_at")),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.table_slug}:{self.record_row_key} {self.event_type}"
+
+
+class DashboardPanelPreference(models.Model):
+    class Zone(models.TextChoices):
+        LEFT = "left", "Left rail"
+        MAIN = "main", "Main column"
+        RIGHT = "right", "Right rail"
+        HIDDEN = "hidden", "Hidden"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="dashboard_panel_preferences",
+    )
+    panel_key = models.SlugField(max_length=80)
+    zone = models.CharField(max_length=20, choices=Zone.choices, default=Zone.MAIN)
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("zone", "sort_order", "panel_key")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "panel_key"),
+                name="unique_dashboard_panel_preference_per_user",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user.username} -> {self.panel_key} ({self.zone})"
+
+
+class DashboardBoard(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="dashboard_boards",
+    )
+    name = models.CharField(max_length=120)
+    description = models.TextField(blank=True)
+    show_on_homepage = models.BooleanField(default=True)
+    autoplay_enabled = models.BooleanField(default=False)
+    autoplay_interval_seconds = models.PositiveSmallIntegerField(default=8)
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("sort_order", "name", "id")
+
+    def clean(self) -> None:
+        if self.autoplay_interval_seconds < 3:
+            raise ValidationError("Autoplay interval should be at least 3 seconds.")
+
+    def __str__(self) -> str:
+        return f"{self.user.username} -> {self.name}"
+
+
+class DashboardBoardItem(models.Model):
+    class CardSize(models.TextChoices):
+        COMPACT = "Compact", "Compact"
+        STANDARD = "Standard", "Standard"
+        WIDE = "Wide", "Wide"
+        FULL = "Full", "Full"
+
+    class ChartHeight(models.TextChoices):
+        SHORT = "Short", "Short"
+        MEDIUM = "Medium", "Medium"
+        TALL = "Tall", "Tall"
+        XL = "XL", "XL"
+
+    board = models.ForeignKey(
+        DashboardBoard,
+        on_delete=models.CASCADE,
+        related_name="items",
+    )
+    widget_row_key = models.UUIDField(db_index=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    card_size = models.CharField(
+        max_length=20,
+        choices=CardSize.choices,
+        default=CardSize.STANDARD,
+    )
+    chart_height = models.CharField(
+        max_length=20,
+        choices=ChartHeight.choices,
+        default=ChartHeight.MEDIUM,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("sort_order", "id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("board", "widget_row_key"),
+                name="unique_dashboard_widget_per_board",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("board", "sort_order")),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.board.name} -> {self.widget_row_key}"
 
 
 class ChatMessage(models.Model):

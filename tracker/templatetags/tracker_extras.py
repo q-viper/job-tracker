@@ -27,6 +27,10 @@ def status_chip_classes(value: str) -> str:
         return "bg-orange-100 text-orange-700 ring-1 ring-inset ring-orange-200"
     if normalized in {"job"}:
         return "bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200"
+    if normalized in {"priority"}:
+        return "bg-rose-100 text-rose-700 ring-1 ring-inset ring-rose-200"
+    if normalized in {"dummy"}:
+        return "bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200"
     if normalized in {"sky", "emerald", "amber", "slate"}:
         return {
             "sky": "bg-sky-100 text-sky-700 ring-1 ring-inset ring-sky-200",

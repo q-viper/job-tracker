@@ -31,7 +31,7 @@
                 <p class="font-mono text-xs uppercase tracking-[0.25em] text-slate-400 dark:text-slate-950/75">Record count</p>
                 <p class="mt-2 text-3xl font-bold">{{ record_count }}</p>
             </div>
-            <form method="get" class="grid gap-3 md:grid-cols-[auto_auto_auto] md:items-end">
+            <form id="table-controls-form" method="get" class="grid gap-3 md:grid-cols-[auto_auto_auto_auto] md:items-end">
                 <div>
                     <label for="id_view" class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">View</label>
                     <select id="id_view" name="view" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white px-4 py-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
@@ -47,19 +47,53 @@
                         {% endfor %}
                     </select>
                 </div>
+                {% if tag_filter_options %}
+                    <div>
+                        <label for="id_tag" class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Tag</label>
+                        <select id="id_tag" name="tag" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white px-4 py-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+                            <option value="">All tags</option>
+                            {% for option in tag_filter_options %}
+                                <option value="{{ option.value }}" {% if tag_filter == option.value %}selected{% endif %}>{{ option.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                {% endif %}
                 <div>
                     <label for="id_dir" class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Direction</label>
-                    <div class="mt-2 flex gap-2">
-                        <select id="id_dir" name="dir" class="w-full rounded-2xl border border-slate-300/80 bg-white px-4 py-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
-                            <option value="desc" {% if sort_direction == 'desc' %}selected{% endif %}>Descending</option>
-                            <option value="asc" {% if sort_direction == 'asc' %}selected{% endif %}>Ascending</option>
-                        </select>
-                        <button type="submit" class="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white dark:bg-slate-700 dark:hover:bg-slate-600">Apply</button>
-                    </div>
+                    <select id="id_dir" name="dir" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white px-4 py-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+                        <option value="desc" {% if sort_direction == 'desc' %}selected{% endif %}>Descending</option>
+                        <option value="asc" {% if sort_direction == 'asc' %}selected{% endif %}>Ascending</option>
+                    </select>
                 </div>
             </form>
         </div>
     </section>
+
+    {% if bulk_actions %}
+        <section class="mt-6 rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85">
+            <form id="bulk-action-form" action="{{ bulk_action_url }}" method="post" class="grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)_auto_auto] lg:items-end">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <div>
+                    <label for="id_bulk_action" class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Bulk action</label>
+                    <select id="id_bulk_action" name="bulk_action" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white px-4 py-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+                        {% for action in bulk_actions %}
+                            <option value="{{ action.value }}">{{ action.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="id_bulk_tags" class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Tags</label>
+                    <input id="id_bulk_tags" name="bulk_tags" type="text" placeholder="Priority, PhD" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white px-4 py-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+                </div>
+                <label class="inline-flex items-center gap-3 rounded-2xl bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700 dark:bg-slate-950/60 dark:text-slate-200">
+                    <input id="bulk-select-all" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500">
+                    Select all on page
+                </label>
+                <button type="submit" class="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400">Apply to selected</button>
+            </form>
+        </section>
+    {% endif %}
 
     {% if view_mode == 'table' %}
         <section class="mt-8 overflow-hidden rounded-[2rem] border border-white/70 bg-white/85 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85">
@@ -67,6 +101,9 @@
                 <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                     <thead class="bg-slate-50 dark:bg-slate-950/60">
                         <tr>
+                            {% if bulk_actions %}
+                                <th class="px-4 py-3 text-left font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Select</th>
+                            {% endif %}
                             {% for column in columns %}
                                 <th class="px-4 py-3 text-left font-mono text-[11px] uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">{{ column.name }}</th>
                             {% endfor %}
@@ -76,6 +113,11 @@
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
                         {% for row in table_rows %}
                             <tr class="align-top">
+                                {% if bulk_actions %}
+                                    <td class="px-4 py-4">
+                                        <input form="bulk-action-form" class="bulk-record-checkbox h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500" type="checkbox" name="selected_row_keys" value="{{ row.record.row_key }}">
+                                    </td>
+                                {% endif %}
                                 {% for cell in row.record.cells %}
                                     <td class="px-4 py-4 text-sm text-slate-700 dark:text-slate-200">
                                         {% if cell.hyperlink %}
@@ -89,6 +131,9 @@
                                 {% endfor %}
                                 <td class="px-4 py-4">
                                     <div class="flex flex-wrap gap-2">
+                                        {% if row.detail_url %}
+                                            <a href="{{ row.detail_url }}" class="rounded-full bg-white px-3 py-2 text-xs font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Open</a>
+                                        {% endif %}
                                         <a href="{{ row.edit_url }}" class="rounded-full bg-slate-950 px-3 py-2 text-xs font-medium text-white dark:bg-sky-500 dark:text-slate-950">Edit</a>
                                         {% if row.promote_url %}
                                             <form action="{{ row.promote_url }}" method="post">
@@ -109,7 +154,7 @@
                             </tr>
                         {% empty %}
                             <tr>
-                                <td colspan="{{ columns|length|add:1 }}" class="px-4 py-10 text-center text-sm text-slate-600 dark:text-slate-300">No records yet. Add your first entry to start using this table.</td>
+                                <td colspan="{% if bulk_actions %}{{ columns|length|add:2 }}{% else %}{{ columns|length|add:1 }}{% endif %}" class="px-4 py-10 text-center text-sm text-slate-600 dark:text-slate-300">No records yet. Add your first entry to start using this table.</td>
                             </tr>
                         {% endfor %}
                     </tbody>
@@ -123,7 +168,23 @@
                     <div class="flex flex-col gap-5">
                         <div class="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
                             <div class="min-w-0 flex-1">
-                                <p class="break-words text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">{{ row.record.label }}</p>
+                                <div class="flex flex-wrap items-start gap-3">
+                                    {% if bulk_actions %}
+                                        <input form="bulk-action-form" class="bulk-record-checkbox mt-1 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500" type="checkbox" name="selected_row_keys" value="{{ row.record.row_key }}">
+                                    {% endif %}
+                                    {% if row.detail_url %}
+                                        <a href="{{ row.detail_url }}" class="break-words text-2xl font-semibold tracking-tight text-slate-900 hover:text-sky-700 dark:text-slate-100 dark:hover:text-sky-300">{{ row.record.label }}</a>
+                                    {% else %}
+                                        <p class="break-words text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">{{ row.record.label }}</p>
+                                    {% endif %}
+                                </div>
+                                {% if row.tags %}
+                                    <div class="mt-3 flex flex-wrap gap-2">
+                                        {% for tag in row.tags %}
+                                            <span class="inline-flex rounded-full px-3 py-1 text-xs font-medium {{ tag.name|status_chip_classes }}">{{ tag.name }}</span>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
                                 <div class="mt-4 flex flex-wrap gap-3">
                                     {% for cell in row.primary_cells %}
                                         <div class="rounded-full border border-slate-200/80 bg-slate-50 px-4 py-2 text-sm dark:border-slate-700 dark:bg-slate-950/60">
@@ -140,6 +201,9 @@
                                 </div>
                             </div>
                             <div class="flex flex-wrap gap-3 xl:w-48 xl:flex-col">
+                                {% if row.detail_url %}
+                                    <a href="{{ row.detail_url }}" class="rounded-full bg-white px-4 py-2 text-center text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Open</a>
+                                {% endif %}
                                 <a href="{{ row.edit_url }}" class="rounded-full bg-slate-950 px-4 py-2 text-center text-sm font-medium text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400">Edit</a>
                                 {% if row.promote_url %}
                                     <form action="{{ row.promote_url }}" method="post">
@@ -186,5 +250,38 @@
                 </article>
             {% endfor %}
         </section>
+    {% endif %}
+
+    {% if bulk_actions %}
+        <script>
+            const bulkSelectAll = document.getElementById("bulk-select-all");
+            const bulkCheckboxes = Array.from(document.querySelectorAll(".bulk-record-checkbox"));
+            const controlsForm = document.getElementById("table-controls-form");
+            const autoSubmitInputs = controlsForm ? Array.from(controlsForm.querySelectorAll("select")) : [];
+
+            if (bulkSelectAll) {
+                bulkSelectAll.addEventListener("change", (event) => {
+                    bulkCheckboxes.forEach((checkbox) => {
+                        checkbox.checked = event.target.checked;
+                    });
+                });
+            }
+
+            autoSubmitInputs.forEach((input) => {
+                input.addEventListener("change", () => {
+                    controlsForm.requestSubmit();
+                });
+            });
+        </script>
+    {% else %}
+        <script>
+            const controlsForm = document.getElementById("table-controls-form");
+            const autoSubmitInputs = controlsForm ? Array.from(controlsForm.querySelectorAll("select")) : [];
+            autoSubmitInputs.forEach((input) => {
+                input.addEventListener("change", () => {
+                    controlsForm.requestSubmit();
+                });
+            });
+        </script>
     {% endif %}
 {% endblock %}

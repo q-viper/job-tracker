@@ -4,7 +4,8 @@ from django import forms
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.core.exceptions import ValidationError
 
-from .models import DynamicColumn, DynamicTable, User
+from .models import ApplicationTag, DashboardBoard, DynamicColumn, DynamicTable, User
+from .services import get_application_tags
 
 
 def apply_widget_classes(field: forms.Field) -> None:
@@ -108,6 +109,30 @@ class AccountSettingsForm(forms.ModelForm):
             apply_widget_classes(field)
 
 
+class DashboardBoardForm(forms.ModelForm):
+    class Meta:
+        model = DashboardBoard
+        fields = (
+            "name",
+            "description",
+            "show_on_homepage",
+            "autoplay_enabled",
+            "autoplay_interval_seconds",
+        )
+        widgets = {
+            "description": forms.Textarea(attrs={"rows": 3}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["name"].help_text = "This is the label you will see in the dashboard library and homepage tabs."
+        self.fields["show_on_homepage"].help_text = "Enable this if the board should appear as an option on the homepage."
+        self.fields["autoplay_enabled"].help_text = "Rotate a spotlight highlight across plots automatically on the homepage."
+        self.fields["autoplay_interval_seconds"].help_text = "Controls how often the homepage spotlight moves to the next plot."
+        for field in self.fields.values():
+            apply_widget_classes(field)
+
+
 class EmailAwareAuthenticationForm(AuthenticationForm):
     error_messages = {
         **AuthenticationForm.error_messages,
@@ -152,10 +177,11 @@ class SignupForm(UserCreationForm):
 
 
 class DynamicRecordForm(forms.Form):
-    def __init__(self, *args, table: DynamicTable, user=None, **kwargs):
+    def __init__(self, *args, table: DynamicTable, user=None, row_key=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.table = table
         self.user = user
+        self.row_key = row_key
         self.dashboard_columns_map: dict[str, list[str]] = {}
 
         for column in table.columns.filter(is_visible=True):
@@ -263,7 +289,33 @@ class DynamicRecordForm(forms.Form):
             apply_widget_classes(self.fields["metric-column"])
 
 
-class ToApplyForm(DynamicRecordForm):
+class JobRecordForm(DynamicRecordForm):
+    def __init__(self, *args, table: DynamicTable, user=None, row_key=None, **kwargs):
+        super().__init__(*args, table=table, user=user, row_key=row_key, **kwargs)
+        self.available_tags: list[str] = []
+        if table.slug not in {"to-apply", "applied"} or user is None:
+            return
+
+        existing_tags = []
+        if row_key:
+            existing_tags = [tag.name for tag in get_application_tags(user, table.slug, row_key)]
+        tag_initial = ", ".join(existing_tags)
+        self.fields["tags"] = forms.CharField(
+            required=False,
+            label="Tags",
+            initial=tag_initial,
+            help_text="Comma-separated. Existing tags can be reused, and new ones are created automatically.",
+            widget=forms.TextInput(attrs={"placeholder": "Dummy, Priority"}),
+        )
+        apply_widget_classes(self.fields["tags"])
+        self.available_tags = list(
+            ApplicationTag.objects.filter(user=user).order_by("name").values_list("name", flat=True)
+        )
+        if self.fields["tags"].initial:
+            self.initial["tags"] = self.fields["tags"].initial
+
+
+class ToApplyForm(JobRecordForm):
     def clean(self):
         cleaned_data = super().clean()
         if not cleaned_data.get("url"):
@@ -271,15 +323,15 @@ class ToApplyForm(DynamicRecordForm):
         return cleaned_data
 
 
-class AppliedCreateForm(DynamicRecordForm):
+class AppliedCreateForm(JobRecordForm):
     source_row_key = forms.ChoiceField(
         required=False,
         label="Import from To Apply",
         choices=[("", "Enter a brand-new application")],
     )
 
-    def __init__(self, *args, table: DynamicTable, user=None, source_records=None, **kwargs):
-        super().__init__(*args, table=table, user=user, **kwargs)
+    def __init__(self, *args, table: DynamicTable, user=None, source_records=None, row_key=None, **kwargs):
+        super().__init__(*args, table=table, user=user, row_key=row_key, **kwargs)
         choices = [("", "Enter a brand-new application")]
         for record in source_records or []:
             role_type = record.values.get("type")
@@ -293,3 +345,7 @@ class AppliedCreateForm(DynamicRecordForm):
         if not cleaned_data.get("source_row_key") and not cleaned_data.get("url"):
             self.add_error("url", "Provide a URL or choose an existing To Apply item.")
         return cleaned_data
+
+
+class AppliedUpdateForm(JobRecordForm):
+    pass

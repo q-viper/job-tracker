@@ -19,12 +19,19 @@
 
         .dashboard-widget-card {
             grid-column: span 12 / span 12;
+            transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
         }
 
         @media (min-width: 1280px) {
             .dashboard-widget-card {
                 grid-column: span var(--widget-span, 6) / span var(--widget-span, 6);
             }
+        }
+
+        .dashboard-widget-card.is-spotlight {
+            transform: translateY(-0.2rem);
+            border-color: rgba(14, 165, 233, 0.45);
+            box-shadow: 0 26px 60px rgba(14, 165, 233, 0.14);
         }
 
         .dashboard-plot-surface {
@@ -80,272 +87,65 @@
     </style>
 
     <section class="grid gap-6 xl:grid-cols-[19rem_minmax(0,1.2fr)_22rem] 2xl:grid-cols-[20rem_minmax(0,1.45fr)_24rem] xl:items-start">
-        <aside class="space-y-6 xl:sticky xl:top-32">
-            <article class="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Application Stages</p>
-                <h2 class="mt-2 text-2xl font-bold tracking-tight">Current progress mix</h2>
-                <div class="mt-6 space-y-4">
-                    {% for stage in stage_breakdown %}
-                        <div>
-                            <div class="flex items-center justify-between text-sm">
-                                <span class="font-medium text-slate-700 dark:text-slate-100">{{ stage.label }}</span>
-                                <span class="font-mono text-slate-500 dark:text-slate-400">{{ stage.count }}</span>
-                            </div>
-                            <div class="mt-2 h-3 rounded-full bg-slate-100 dark:bg-slate-800">
-                                <div class="h-3 rounded-full" style="width: {{ stage.percentage }}%; background-color: {{ stage.color }};"></div>
-                            </div>
-                        </div>
-                    {% empty %}
-                        <p class="text-sm text-slate-600 dark:text-slate-300">Progress bars will appear here once you have applied records.</p>
-                    {% endfor %}
-                </div>
-            </article>
-
-            <article class="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <div class="flex items-center justify-between gap-3">
-                    <div>
-                        <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Quick Actions</p>
-                        <h2 class="mt-2 text-lg font-bold tracking-tight">Helpful dashboard tools</h2>
-                    </div>
-                </div>
-                <div class="mt-5 flex flex-col gap-3">
-                    <button id="download-dashboard" type="button" class="rounded-full bg-slate-950 px-4 py-3 text-sm font-medium text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400">Download dashboard</button>
-                    <a href="{{ dashboard_create_url }}" class="rounded-full bg-white px-4 py-3 text-center text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Add widget</a>
-                    <a href="{{ dashboard_manage_url }}" class="rounded-full bg-white px-4 py-3 text-center text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Open dashboard table</a>
-                </div>
-            </article>
-
-            <article class="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Plot Templates</p>
-                <h2 class="mt-2 text-xl font-bold tracking-tight">Starter charts</h2>
-                <div class="mt-5 max-h-[24rem] space-y-4 overflow-y-auto pr-2">
-                    {% for template in dashboard_templates %}
-                        <div class="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                            <div class="flex items-start justify-between gap-3">
-                                <div class="min-w-0">
-                                    <p class="break-words text-sm font-semibold leading-5 text-slate-900 dark:text-slate-100" title="{{ template.title }}">{{ template.title }}</p>
-                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ template.chart_type }}</p>
-                                </div>
-                                {% if template.is_seeded %}
-                                    <span class="rounded-full bg-sky-100 px-2 py-1 text-[10px] font-semibold text-sky-800 dark:bg-sky-500/20 dark:text-sky-200">Default</span>
-                                {% endif %}
-                            </div>
-                            <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{{ template.notes }}</p>
-                            <div class="mt-3 flex flex-wrap gap-2">
-                                {% if template.has_record %}
-                                    <a href="{{ template.edit_url }}" class="rounded-full bg-slate-950 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400">Edit</a>
-                                {% else %}
-                                    <a href="{{ template.create_url }}" class="rounded-full bg-emerald-100 px-3 py-2 text-[11px] font-semibold text-emerald-800 transition hover:bg-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-200">Create</a>
-                                {% endif %}
-                            </div>
-                        </div>
-                    {% endfor %}
-                </div>
-            </article>
+        <aside class="order-2 space-y-6 xl:order-1 xl:sticky xl:top-32">
+            {% for panel in dashboard_panel_layout.left %}
+                {% include "tracker/dashboard_panel_card.html" %}
+            {% empty %}
+                <article class="rounded-[2rem] border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+                    Left rail panels are hidden. Use <a href="{{ dashboard_customize_url }}" class="font-semibold text-sky-700 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200">Customize layout</a> to bring them back.
+                </article>
+            {% endfor %}
         </aside>
 
-        <div class="space-y-6">
+        <div class="order-1 space-y-6 xl:order-2">
             <article class="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Dashboard Studio</p>
-                <h2 class="mt-2 text-3xl font-bold tracking-tight">A wider, cleaner canvas for your plots</h2>
-                <p class="mt-3 max-w-4xl text-sm text-slate-600 dark:text-slate-300">
-                    Drag plots to reorder them, use the width and height fields to reshape each card, expand any chart into a larger view, and keep the Sankey readable even when the layout changes.
-                </p>
+                <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
+                        <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Homepage</p>
+                        <h2 class="mt-2 text-3xl font-bold tracking-tight">A cleaner home for the dashboards you saved</h2>
+                        <p class="mt-3 max-w-4xl text-sm text-slate-600 dark:text-slate-300">
+                            Pick a saved board, scan the latest plots, and jump into the designer only when you want to rearrange things.
+                        </p>
+                        {% if homepage_boards %}
+                            <div class="mt-4 flex flex-wrap gap-2">
+                                {% for board in homepage_boards %}
+                                    <a href="{% url 'dashboard' %}?board={{ board.id }}" class="rounded-full px-4 py-2 text-sm font-medium transition {% if selected_homepage_board and selected_homepage_board.id == board.id %}bg-slate-950 text-white dark:bg-sky-500 dark:text-slate-950{% else %}bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700{% endif %}">
+                                        {{ board.name }}
+                                    </a>
+                                {% endfor %}
+                                {% if selected_homepage_board and not selected_homepage_board.show_on_homepage %}
+                                    <span class="rounded-full bg-amber-100 px-4 py-2 text-sm font-medium text-amber-900 dark:bg-amber-500/20 dark:text-amber-200">Previewing a saved library board</span>
+                                {% endif %}
+                            </div>
+                        {% endif %}
+                    </div>
+                    <div class="flex flex-wrap gap-3">
+                        {% if dashboard_designer_url %}
+                            <a href="{{ dashboard_designer_url }}" class="rounded-full bg-emerald-100 px-4 py-3 text-sm font-medium text-emerald-900 transition hover:bg-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-200 dark:hover:bg-emerald-500/30">Open designer</a>
+                        {% endif %}
+                        <a href="{{ dashboard_boards_url }}" class="rounded-full bg-white px-4 py-3 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Dashboard library</a>
+                        <a href="{{ dashboard_customize_url }}" class="rounded-full bg-amber-100 px-4 py-3 text-sm font-medium text-amber-900 transition hover:bg-amber-200 dark:bg-amber-500/20 dark:text-amber-200 dark:hover:bg-amber-500/30">Customize rails</a>
+                    </div>
+                </div>
             </article>
 
-            <section class="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
-                {% for metric in metrics %}
-                    <article class="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                        <p class="font-mono text-xs uppercase tracking-[0.25em] text-slate-500 dark:text-slate-400">{{ metric.label }}</p>
-                        <p class="mt-4 text-4xl font-bold tracking-tight">{{ metric.value }}</p>
-                        <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">{{ metric.hint }}</p>
-                    </article>
-                {% endfor %}
-            </section>
-
-            <section id="dashboard-export-surface">
-                <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                    <div>
-                        <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Visible Dashboard</p>
-                        <h2 class="mt-2 text-2xl font-bold tracking-tight">Plots you are actively working with</h2>
-                    </div>
-                    <p class="text-sm text-slate-500 dark:text-slate-400">Use the compact controls in each card to resize width and chart height.</p>
-                </div>
-                <div id="dashboard-widget-grid" class="mt-6">
-                    {% for widget in dashboard_widgets %}
-                        <article class="dashboard-widget-card rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900" data-row-key="{{ widget.row_key }}" style="--widget-span: {{ widget.grid_span }}; --widget-height: {{ widget.chart_height_px }}px;">
-                            <div class="dashboard-widget-header">
-                                <div class="dashboard-widget-meta flex min-w-0 flex-wrap items-center gap-2">
-                                        <button type="button" class="widget-drag-handle rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">Drag</button>
-                                        <span class="rounded-full px-3 py-1 text-xs font-medium {{ widget.accent|status_chip_classes }}">{{ widget.accent }}</span>
-                                        <span class="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">{{ widget.chart_type|title }}</span>
-                                </div>
-                                <div class="dashboard-widget-actions flex flex-wrap items-center gap-2 xl:justify-end">
-                                    <label class="rounded-full bg-slate-100 px-3 py-2 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                                        <span class="mr-2">Width</span>
-                                        <select class="dashboard-layout-field bg-transparent outline-none" data-row-key="{{ widget.row_key }}" data-field="card-size">
-                                            <option value="Compact" {% if widget.card_size == 'Compact' %}selected{% endif %}>Compact</option>
-                                            <option value="Standard" {% if widget.card_size == 'Standard' %}selected{% endif %}>Standard</option>
-                                            <option value="Wide" {% if widget.card_size == 'Wide' %}selected{% endif %}>Wide</option>
-                                            <option value="Full" {% if widget.card_size == 'Full' %}selected{% endif %}>Full</option>
-                                        </select>
-                                    </label>
-                                    <label class="rounded-full bg-slate-100 px-3 py-2 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                                        <span class="mr-2">Height</span>
-                                        <select class="dashboard-layout-field bg-transparent outline-none" data-row-key="{{ widget.row_key }}" data-field="chart-height">
-                                            <option value="Short" {% if widget.chart_height == 'Short' %}selected{% endif %}>Short</option>
-                                            <option value="Medium" {% if widget.chart_height == 'Medium' %}selected{% endif %}>Medium</option>
-                                            <option value="Tall" {% if widget.chart_height == 'Tall' %}selected{% endif %}>Tall</option>
-                                            <option value="XL" {% if widget.chart_height == 'XL' %}selected{% endif %}>XL</option>
-                                        </select>
-                                    </label>
-                                    <button type="button" class="dashboard-toggle-visibility inline-flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700" data-row-key="{{ widget.row_key }}" data-state="Hide" title="Hide widget">
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
-                                            <path stroke-linecap="round" stroke-linejoin="round" d="m3 3 18 18M10.584 10.587A2 2 0 0 0 13.41 13.4M9.879 5.092A10.45 10.45 0 0 1 12 4.875c4.478 0 8.268 2.943 9.543 7.001a9.72 9.72 0 0 1-2.14 3.412M6.228 6.228C4.308 7.52 2.86 9.45 2.457 11.876a9.72 9.72 0 0 0 4.273 5.44A10.45 10.45 0 0 0 12 19.125c1.84 0 3.576-.46 5.096-1.272" />
-                                        </svg>
-                                    </button>
-                                    <button type="button" class="dashboard-expand-chart inline-flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-800 transition hover:bg-sky-200 dark:bg-sky-500/20 dark:text-sky-200" data-row-key="{{ widget.row_key }}" title="Expand chart">
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
-                                            <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 3.75H5.625A1.875 1.875 0 0 0 3.75 5.625V8.25m16.5 7.5v2.625a1.875 1.875 0 0 1-1.875 1.875H15.75m-7.5 0H5.625a1.875 1.875 0 0 1-1.875-1.875V15.75m16.5-7.5V5.625A1.875 1.875 0 0 0 18.375 3.75H15.75" />
-                                        </svg>
-                                    </button>
-                                    <button type="button" class="dashboard-download-chart inline-flex h-10 w-10 items-center justify-center rounded-full bg-emerald-100 text-emerald-800 transition hover:bg-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-200" data-row-key="{{ widget.row_key }}" title="Download chart">
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
-                                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3.75v10.5m0 0 3.75-3.75M12 14.25l-3.75-3.75M4.5 15.75v2.625A1.125 1.125 0 0 0 5.625 19.5h12.75a1.125 1.125 0 0 0 1.125-1.125V15.75" />
-                                        </svg>
-                                    </button>
-                                    <a href="{% url 'workspace_record_edit' 'dashboard' widget.row_key %}" class="rounded-full bg-slate-950 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400">Edit</a>
-                                </div>
-                                <p class="dashboard-widget-title break-words text-xl font-semibold leading-tight text-slate-900 dark:text-slate-100" title="{{ widget.title }}">{{ widget.title }}</p>
-                                <p class="dashboard-widget-source break-words text-sm leading-5 text-slate-500 dark:text-slate-400" title="{{ widget.source_table }}">{{ widget.source_table|default:"Custom source" }}</p>
-                            </div>
-
-                            {% if widget.chart_type == 'kpi' %}
-                                <div class="mt-6 rounded-3xl bg-slate-950 p-6 text-white dark:bg-sky-500 dark:text-slate-950">
-                                    <p class="text-5xl font-bold tracking-tight">{{ widget.kpi_value }}</p>
-                                    {% if widget.metric_label %}
-                                        <p class="mt-2 text-sm text-slate-300 dark:text-slate-950/80">{{ widget.metric_label }}</p>
-                                    {% endif %}
-                                </div>
-                            {% elif widget.chart_type == 'sankey' %}
-                                <div class="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950/60">
-                                    <div id="dashboard-chart-{{ widget.row_key }}" data-dashboard-chart="{{ widget.row_key }}" class="dashboard-plot-surface"></div>
-                                </div>
-                            {% else %}
-                                <div class="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-950/60">
-                                    <div class="dashboard-plot-surface">
-                                        <canvas id="dashboard-chart-{{ widget.row_key }}" data-dashboard-chart="{{ widget.row_key }}"></canvas>
-                                    </div>
-                                </div>
-                            {% endif %}
-
-                            {% if widget.notes %}
-                                <p class="mt-4 break-words text-sm leading-6 text-slate-600 dark:text-slate-300">{{ widget.notes }}</p>
-                            {% endif %}
-                        </article>
-                    {% empty %}
-                        <article class="rounded-[2rem] border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-                            No widgets are visible yet. Create a chart or switch one of your saved plots back to the dashboard.
-                        </article>
-                    {% endfor %}
-                </div>
-            </section>
+            {% for panel in dashboard_panel_layout.main %}
+                {% include "tracker/dashboard_panel_card.html" %}
+            {% empty %}
+                <article class="rounded-[2rem] border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+                    Main dashboard panels are hidden. Use Customize layout to bring back your metrics or widget canvas.
+                </article>
+            {% endfor %}
         </div>
 
-        <aside class="space-y-6 xl:sticky xl:top-32">
-            <article class="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <div class="flex items-center justify-between gap-4">
-                    <div>
-                        <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Saved Plots</p>
-                        <h2 class="mt-2 text-xl font-bold tracking-tight">Hidden widgets</h2>
-                    </div>
-                    <a href="{{ dashboard_manage_url }}" class="text-sm font-medium text-sky-700 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200">All</a>
-                </div>
-                <div class="mt-5 max-h-[18rem] space-y-4 overflow-y-auto pr-2">
-                    {% for widget in hidden_dashboard_widgets %}
-                        <div class="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                            <div class="flex items-start justify-between gap-3">
-                                <div class="min-w-0">
-                                    <p class="break-words text-sm font-semibold leading-5 text-slate-900 dark:text-slate-100" title="{{ widget.title }}">{{ widget.title }}</p>
-                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ widget.chart_type|title }}</p>
-                                </div>
-                                <button type="button" class="dashboard-toggle-visibility inline-flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-emerald-800 transition hover:bg-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-200" data-row-key="{{ widget.row_key }}" data-state="Show" title="Show widget">
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
-                                        <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.644C3.423 7.51 7.36 4.875 12 4.875c4.638 0 8.573 2.633 9.963 6.797.07.209.07.435 0 .644C20.577 16.49 16.64 19.125 12 19.125c-4.638 0-8.573-2.633-9.964-6.803Z" />
-                                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-                                    </svg>
-                                </button>
-                            </div>
-                            {% if widget.notes %}
-                                <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{{ widget.notes }}</p>
-                            {% endif %}
-                        </div>
-                    {% empty %}
-                        <p class="text-sm text-slate-600 dark:text-slate-300">All widgets are already visible.</p>
-                    {% endfor %}
-                </div>
-            </article>
-
-            <article class="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <div class="flex items-center justify-between gap-4">
-                    <div>
-                        <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">To Apply</p>
-                        <h2 class="mt-2 text-xl font-bold tracking-tight">Upcoming deadlines</h2>
-                    </div>
-                    <a href="{% url 'to_apply_list' %}" class="text-sm font-medium text-sky-700 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200">Open</a>
-                </div>
-                <div class="mt-5 max-h-[18rem] space-y-4 overflow-y-auto pr-2">
-                    {% for record in upcoming_deadlines %}
-                        <div class="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                            <div class="min-w-0">
-                                {% if record.values.url %}
-                                    <a href="{{ record.values.url }}" target="_blank" rel="noreferrer" class="block break-words font-semibold text-sky-700 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200">{{ record.label }}</a>
-                                {% else %}
-                                    <p class="break-words font-semibold text-slate-900 dark:text-slate-100">{{ record.label }}</p>
-                                {% endif %}
-                                {% for cell in record.cells %}
-                                    {% if cell.column.slug == 'deadline' and cell.value %}
-                                        <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">{{ cell.display_value }}</p>
-                                    {% endif %}
-                                {% endfor %}
-                            </div>
-                        </div>
-                    {% empty %}
-                        <p class="text-sm text-slate-600 dark:text-slate-300">No dated items in To Apply yet.</p>
-                    {% endfor %}
-                </div>
-            </article>
-
-            <article class="rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <div class="flex items-center justify-between gap-4">
-                    <div>
-                        <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Applied</p>
-                        <h2 class="mt-2 text-xl font-bold tracking-tight">Recent submissions</h2>
-                    </div>
-                    <a href="{% url 'applied_list' %}" class="text-sm font-medium text-sky-700 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200">Open</a>
-                </div>
-                <div class="mt-5 max-h-[18rem] space-y-4 overflow-y-auto pr-2">
-                    {% for record in recent_applied %}
-                        <div class="rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                            <p class="break-words font-semibold text-slate-900 dark:text-slate-100">{{ record.label }}</p>
-                            {% with progress=record|inferred_progress %}
-                            <div class="mt-3 flex flex-wrap items-center gap-3">
-                                {% for cell in record.cells %}
-                                    {% if cell.column.slug == 'date' and cell.value %}
-                                        <p class="text-sm text-slate-600 dark:text-slate-300">Submitted {{ cell.display_value }}</p>
-                                    {% endif %}
-                                {% endfor %}
-                                {% if progress %}
-                                    <span class="inline-flex rounded-full px-3 py-1 text-xs font-medium {{ progress|status_chip_classes }}">{{ progress }}</span>
-                                {% endif %}
-                            </div>
-                            {% endwith %}
-                        </div>
-                    {% empty %}
-                        <p class="text-sm text-slate-600 dark:text-slate-300">Applied records will show up here once you start tracking them.</p>
-                    {% endfor %}
-                </div>
-            </article>
+        <aside class="order-3 space-y-6 xl:sticky xl:top-32">
+            {% for panel in dashboard_panel_layout.right %}
+                {% include "tracker/dashboard_panel_card.html" %}
+            {% empty %}
+                <article class="rounded-[2rem] border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+                    Right rail panels are hidden. Use <a href="{{ dashboard_customize_url }}" class="font-semibold text-sky-700 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200">Customize layout</a> to change that.
+                </article>
+            {% endfor %}
         </aside>
     </section>
 
@@ -368,7 +168,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.3/Sortable.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
     <script>
         const dashboardWidgets = JSON.parse("{{ dashboard_widgets_json|escapejs }}");
@@ -378,6 +177,8 @@
         const modal = document.getElementById("dashboard-chart-modal");
         const modalSurface = document.getElementById("dashboard-chart-modal-surface");
         const modalTitle = document.getElementById("dashboard-chart-modal-title");
+        const homepageBoardAutoplayEnabled = {% if selected_homepage_board %}{{ selected_homepage_board.autoplay_enabled|yesno:"true,false" }}{% else %}false{% endif %};
+        const homepageBoardAutoplayInterval = {% if selected_homepage_board %}{{ selected_homepage_board.autoplay_interval_seconds }}{% else %}8{% endif %};
         const cardSizeMap = { Compact: 4, Standard: 6, Wide: 8, Full: 12 };
         const chartHeightMap = { Short: 280, Medium: 360, Tall: 430, XL: 520 };
 
@@ -541,76 +342,6 @@
         });
         registerResizeObservers();
 
-        async function patchDashboardWidget(rowKey, values) {
-            const response = await fetch(`/api/tables/dashboard/records/${rowKey}/`, {
-                method: "PATCH",
-                headers: {
-                    "Content-Type": "application/json",
-                    "X-CSRFToken": document.querySelector("#quassi-csrf-form input[name=csrfmiddlewaretoken]").value,
-                },
-                body: JSON.stringify({ values }),
-            });
-            if (!response.ok) {
-                throw new Error("Could not update dashboard widget.");
-            }
-            return response.json();
-        }
-
-        document.querySelectorAll(".dashboard-toggle-visibility").forEach((button) => {
-            button.addEventListener("click", async () => {
-                try {
-                    button.disabled = true;
-                    await patchDashboardWidget(button.dataset.rowKey, { "show-on-dashboard": button.dataset.state });
-                    window.location.reload();
-                } catch (error) {
-                    button.disabled = false;
-                }
-            });
-        });
-
-        document.querySelectorAll(".dashboard-layout-field").forEach((select) => {
-            select.addEventListener("change", async () => {
-                const rowKey = select.dataset.rowKey;
-                const field = select.dataset.field;
-                const widget = widgetMap[rowKey];
-                const previousValue = field === "card-size" ? widget.card_size : widget.chart_height;
-                const nextValue = select.value;
-                if (field === "card-size") {
-                    widget.card_size = nextValue;
-                } else {
-                    widget.chart_height = nextValue;
-                }
-                applyWidgetDimensions(rowKey);
-                resizeRenderedWidget(rowKey);
-                try {
-                    await patchDashboardWidget(rowKey, { [field]: nextValue });
-                } catch (error) {
-                    if (field === "card-size") {
-                        widget.card_size = previousValue;
-                    } else {
-                        widget.chart_height = previousValue;
-                    }
-                    select.value = previousValue;
-                    applyWidgetDimensions(rowKey);
-                    resizeRenderedWidget(rowKey);
-                }
-            });
-        });
-
-        const widgetGrid = document.getElementById("dashboard-widget-grid");
-        if (widgetGrid && typeof Sortable !== "undefined") {
-            new Sortable(widgetGrid, {
-                animation: 180,
-                handle: ".widget-drag-handle",
-                onEnd: async () => {
-                    const cards = [...widgetGrid.querySelectorAll(".dashboard-widget-card")];
-                    await Promise.all(
-                        cards.map((card, index) => patchDashboardWidget(card.dataset.rowKey, { "sort-order": String((index + 1) * 10) }))
-                    );
-                },
-            });
-        }
-
         document.querySelectorAll(".dashboard-expand-chart").forEach((button) => {
             button.addEventListener("click", () => {
                 const widget = widgetMap[button.dataset.rowKey];
@@ -635,10 +366,13 @@
             });
         });
 
-        document.getElementById("dashboard-chart-modal-close").addEventListener("click", () => {
-            modal.classList.add("hidden");
-            modalSurface.innerHTML = "";
-        });
+        const dashboardModalClose = document.getElementById("dashboard-chart-modal-close");
+        if (dashboardModalClose) {
+            dashboardModalClose.addEventListener("click", () => {
+                modal.classList.add("hidden");
+                modalSurface.innerHTML = "";
+            });
+        }
 
         document.querySelectorAll(".dashboard-download-chart").forEach((button) => {
             button.addEventListener("click", async () => {
@@ -660,14 +394,35 @@
             });
         });
 
-        document.getElementById("download-dashboard").addEventListener("click", async () => {
-            const exportSurface = document.getElementById("dashboard-export-surface");
-            const canvas = await html2canvas(exportSurface, { scale: 2, backgroundColor: "#f8fafc" });
-            const link = document.createElement("a");
-            link.href = canvas.toDataURL("image/png");
-            link.download = "job-tracker-dashboard.png";
-            link.click();
-        });
+        const dashboardDownloadButton = document.getElementById("download-dashboard");
+        if (dashboardDownloadButton) {
+            dashboardDownloadButton.addEventListener("click", async () => {
+                const exportSurface = document.getElementById("dashboard-export-surface");
+                if (!exportSurface) {
+                    return;
+                }
+                const canvas = await html2canvas(exportSurface, { scale: 2, backgroundColor: "#f8fafc" });
+                const link = document.createElement("a");
+                link.href = canvas.toDataURL("image/png");
+                link.download = "job-tracker-dashboard.png";
+                link.click();
+            });
+        }
+
+        if (homepageBoardAutoplayEnabled && dashboardWidgets.length > 1) {
+            const cards = [...document.querySelectorAll(".dashboard-widget-card[data-row-key]")];
+            let spotlightIndex = 0;
+            const applySpotlight = () => {
+                cards.forEach((card, index) => {
+                    card.classList.toggle("is-spotlight", index === spotlightIndex);
+                });
+            };
+            applySpotlight();
+            window.setInterval(() => {
+                spotlightIndex = (spotlightIndex + 1) % cards.length;
+                applySpotlight();
+            }, Math.max(homepageBoardAutoplayInterval, 3) * 1000);
+        }
 
         window.addEventListener("resize", () => {
             Object.keys(chartInstances).forEach((rowKey) => resizeRenderedWidget(rowKey));
