@@ -1,3 +1,4 @@
+tracker/migrations/*
 .venv/
 __pycache__/
 *.pyc

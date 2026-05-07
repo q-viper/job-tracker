@@ -11,12 +11,13 @@
                 <p class="mt-3 break-all text-sm text-slate-600">{{ portal_record.values.url }}</p>
             </div>
         </div>
-        <form action="{% url 'fetch_portal_jobs' portal_record.row_key %}" method="post" class="mt-6 grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
+        <form id="portal-fetch-form" action="{% url 'fetch_portal_jobs' portal_record.row_key %}" method="post" data-fetch-url="{% url 'api_portal_fetch' portal_record.row_key %}" class="mt-6 grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
             {% csrf_token %}
             <div>
                 <label class="text-sm font-semibold text-slate-800" for="id_keywords">Filter keywords</label>
                 <textarea id="id_keywords" name="keywords" rows="4" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white/85 px-4 py-3 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-200">{{ current_keywords }}</textarea>
                 <p class="mt-2 text-sm text-slate-500">By default, the scraper uses keywords like PhD, Candidate, Wissenschaft, Research, Engineer, ML, AI, Data, and more.</p>
+                <p id="portal-live-status" class="mt-2 text-sm font-medium text-slate-600" aria-live="polite"></p>
             </div>
             <div class="flex flex-wrap gap-3">
                 <button class="rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800" type="submit">Fetch latest jobs</button>
@@ -31,9 +32,9 @@
         </form>
     </section>
 
-    <section class="mt-8 space-y-4">
+    <section id="portal-job-results" class="mt-8 space-y-4" data-add-url-template="{% url 'add_portal_job_to_apply' 0 %}" data-empty-message="No fetched jobs match these keywords yet.">
         {% for job in jobs %}
-            <article class="rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-sm backdrop-blur">
+            <article class="portal-job-card rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-sm backdrop-blur" data-search-text="{{ job.title }} {{ job.summary }} {{ job.url }}">
                 <div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                     <div class="flex-1">
                         <a href="{{ job.url }}" target="_blank" rel="noreferrer" class="text-lg font-semibold text-sky-700 hover:text-sky-800">{{ job.title }}</a>
@@ -55,9 +56,139 @@
                 </div>
             </article>
         {% empty %}
-            <article class="rounded-[2rem] border border-dashed border-slate-300 bg-white/70 p-10 text-center text-sm text-slate-600 shadow-sm backdrop-blur">
-                Fetch this portal to populate potential jobs here.
-            </article>
         {% endfor %}
+        <article id="portal-empty-state" class="{% if jobs %}hidden {% endif %}rounded-[2rem] border border-dashed border-slate-300 bg-white/70 p-10 text-center text-sm text-slate-600 shadow-sm backdrop-blur">
+            Fetch this portal to populate potential jobs here.
+        </article>
     </section>
+
+    <script>
+        (() => {
+            const form = document.getElementById("portal-fetch-form");
+            const keywordInput = document.getElementById("id_keywords");
+            const results = document.getElementById("portal-job-results");
+            const status = document.getElementById("portal-live-status");
+            const emptyState = document.getElementById("portal-empty-state");
+            if (!form || !keywordInput || !results || !status || !emptyState) {
+                return;
+            }
+
+            const equivalents = {
+                ai: ["artificial intelligence"],
+                "artificial intelligence": ["ai"],
+                ml: ["machine learning"],
+                "machine learning": ["ml"],
+                cv: ["computer vision"],
+                "computer vision": ["cv"],
+                nlp: ["natural language processing"],
+                "natural language processing": ["nlp"],
+            };
+
+            function escapeHtml(value) {
+                return String(value || "")
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#39;");
+            }
+
+            function normalize(value) {
+                return String(value || "")
+                    .normalize("NFKD")
+                    .replace(/[\u0300-\u036f]/g, "")
+                    .toLowerCase()
+                    .replace(/[^0-9a-z]+/g, " ")
+                    .replace(/\s+/g, " ")
+                    .trim();
+            }
+
+            function splitKeywords(value) {
+                return String(value || "").split(/[,;\n]+/).map((item) => item.trim()).filter(Boolean);
+            }
+
+            function keywordVariants(keyword) {
+                const normalized = normalize(keyword);
+                if (!normalized) {
+                    return [];
+                }
+                const variants = [normalized, ...(equivalents[normalized] || [])];
+                keyword.split(/[\/|&]+/).forEach((part) => {
+                    const normalizedPart = normalize(part);
+                    if (normalizedPart) {
+                        variants.push(normalizedPart);
+                    }
+                });
+                return [...new Set(variants)];
+            }
+
+            function matchesKeyword(searchText, keyword) {
+                const padded = ` ${normalize(searchText)} `;
+                return keywordVariants(keyword).some((variant) => {
+                    if (padded.includes(` ${variant} `)) {
+                        return true;
+                    }
+                    const tokens = variant.split(" ");
+                    return tokens.length > 1 && tokens.every((token) => padded.includes(` ${token} `));
+                });
+            }
+
+            function filterCards() {
+                const keywords = splitKeywords(keywordInput.value);
+                const cards = [...results.querySelectorAll(".portal-job-card")];
+                let visible = 0;
+                cards.forEach((card) => {
+                    const matches = !keywords.length || keywords.some((keyword) => matchesKeyword(card.dataset.searchText || "", keyword));
+                    card.classList.toggle("hidden", !matches);
+                    if (matches) {
+                        visible += 1;
+                    }
+                });
+                emptyState.classList.toggle("hidden", visible > 0);
+                emptyState.textContent = cards.length ? results.dataset.emptyMessage : "Fetch this portal to populate potential jobs here.";
+                status.textContent = cards.length ? `${visible} of ${cards.length} fetched jobs visible` : "";
+            }
+
+            function renderJob(job) {
+                const addUrl = results.dataset.addUrlTemplate.replace("/0/", `/${job.id}/`);
+                const action = job.added_to_apply
+                    ? '<span class="rounded-full bg-emerald-100 px-4 py-2 text-sm font-medium text-emerald-700 ring-1 ring-emerald-200">Already in To Apply</span>'
+                    : `<form action="${addUrl}" method="post"><input type="hidden" name="csrfmiddlewaretoken" value="${escapeHtml(form.querySelector("[name=csrfmiddlewaretoken]").value)}"><button class="rounded-full bg-sky-100 px-4 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-200" type="submit">Add to To Apply</button></form>`;
+                const summary = job.summary ? `<p class="mt-4 text-sm leading-6 text-slate-600">${escapeHtml(job.summary)}</p>` : "";
+                const searchText = escapeHtml(`${job.title || ""} ${job.summary || ""} ${job.url || ""}`);
+                return `<article class="portal-job-card rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-sm backdrop-blur" data-search-text="${searchText}"><div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between"><div class="flex-1"><a href="${escapeHtml(job.url)}" target="_blank" rel="noreferrer" class="text-lg font-semibold text-sky-700 hover:text-sky-800">${escapeHtml(job.title)}</a><p class="mt-3 break-all text-sm text-slate-500">${escapeHtml(job.url)}</p>${summary}</div><div class="flex flex-wrap gap-3">${action}</div></div></article>`;
+            }
+
+            keywordInput.addEventListener("input", filterCards);
+            filterCards();
+
+            form.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                const button = form.querySelector('button[type="submit"]');
+                button.disabled = true;
+                status.textContent = "Fetching matching jobs...";
+                try {
+                    const response = await fetch(form.dataset.fetchUrl, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-CSRFToken": form.querySelector("[name=csrfmiddlewaretoken]").value,
+                        },
+                        body: JSON.stringify({ keywords: keywordInput.value }),
+                    });
+                    if (!response.ok) {
+                        throw new Error("Fetch failed");
+                    }
+                    const jobs = await response.json();
+                    results.querySelectorAll(".portal-job-card").forEach((card) => card.remove());
+                    results.insertAdjacentHTML("afterbegin", jobs.map(renderJob).join(""));
+                    filterCards();
+                } catch (error) {
+                    status.textContent = "Could not fetch jobs in realtime. The page form is still available after reload.";
+                } finally {
+                    button.disabled = false;
+                }
+            });
+        })();
+    </script>
 {% endblock %}

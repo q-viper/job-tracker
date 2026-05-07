@@ -332,6 +332,8 @@ class AppliedCreateForm(JobRecordForm):
 
     def __init__(self, *args, table: DynamicTable, user=None, source_records=None, row_key=None, **kwargs):
         super().__init__(*args, table=table, user=user, row_key=row_key, **kwargs)
+        if "url" in self.fields:
+            self.fields["url"].required = False
         choices = [("", "Enter a brand-new application")]
         for record in source_records or []:
             role_type = record.values.get("type")
@@ -340,12 +342,9 @@ class AppliedCreateForm(JobRecordForm):
         self.fields["source_row_key"].choices = choices
         apply_widget_classes(self.fields["source_row_key"])
 
-    def clean(self):
-        cleaned_data = super().clean()
-        if not cleaned_data.get("source_row_key") and not cleaned_data.get("url"):
-            self.add_error("url", "Provide a URL or choose an existing To Apply item.")
-        return cleaned_data
-
 
 class AppliedUpdateForm(JobRecordForm):
-    pass
+    def __init__(self, *args, table: DynamicTable, user=None, row_key=None, **kwargs):
+        super().__init__(*args, table=table, user=user, row_key=row_key, **kwargs)
+        if "url" in self.fields:
+            self.fields["url"].required = False

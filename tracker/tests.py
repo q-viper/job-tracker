@@ -12,6 +12,7 @@ from django.urls import reverse
 from openpyxl import Workbook, load_workbook
 
 from .chat_handler import ChatHandler
+from .forms import AppliedCreateForm, AppliedUpdateForm
 from .models import (
     ApplicationHistoryEvent,
     ApplicationTag,
@@ -29,10 +30,13 @@ from .rag import chat_with_rag
 from .services import (
     aggregate_records,
     build_applied_flow_chart,
+    build_active_applied_pipeline_chart,
     build_dashboard,
     delete_record,
     ensure_user_workspace,
+    extract_jobs_from_portal_html,
     get_records,
+    matches_any_keyword,
     move_to_applied,
     save_record,
     scrape_jobs_from_portal,
@@ -147,6 +151,26 @@ class DynamicRecordServiceTests(TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].values["role-title"], "ML Engineer")
         self.assertEqual(records[0].values["type"], "Job")
+
+    def test_applied_forms_allow_missing_url(self):
+        DynamicColumn.objects.filter(table=self.applied, slug="url").update(is_required=True)
+
+        create_form = AppliedCreateForm(
+            data={"role-title": "Offline Referral Application", "type": "Job"},
+            table=self.applied,
+            user=self.user,
+            source_records=[],
+        )
+        update_form = AppliedUpdateForm(
+            data={"role-title": "Offline Referral Application", "type": "Job"},
+            table=self.applied,
+            user=self.user,
+        )
+
+        self.assertTrue(create_form.is_valid(), create_form.errors)
+        self.assertTrue(update_form.is_valid(), update_form.errors)
+        self.assertFalse(create_form.fields["url"].required)
+        self.assertFalse(update_form.fields["url"].required)
 
     def test_move_to_applied_removes_source_row(self):
         source_row_key = save_record(
@@ -721,6 +745,51 @@ class DynamicRecordServiceTests(TestCase):
         self.assertTrue(payload["sources"])
         self.assertIn("PhD Candidate in Computer Vision", payload["sources"][0]["title"])
 
+    def test_active_applied_pipeline_counts_progress_without_rejected_or_withdrawn(self):
+        for values in [
+            {
+                "date": "2026-04-29",
+                "role-title": "Applied Role",
+                "type": "Job",
+                "application-progress": "Applied",
+                "result": "Pending",
+            },
+            {
+                "date": "2026-04-29",
+                "role-title": "Interview Role",
+                "type": "Job",
+                "application-progress": "Interview",
+                "result": "Pending",
+            },
+            {
+                "date": "2026-04-29",
+                "role-title": "Second Interview Role",
+                "type": "Job",
+                "application-progress": "Interview",
+                "result": "",
+            },
+            {
+                "date": "2026-04-29",
+                "role-title": "Rejected Role",
+                "type": "Job",
+                "application-progress": "Interview",
+                "result": "Rejected",
+            },
+            {
+                "date": "2026-04-29",
+                "role-title": "Withdrawn Role",
+                "type": "Job",
+                "application-progress": "Withdrawn",
+                "result": "Withdrawn",
+            },
+        ]:
+            save_record(self.applied, self.user, values)
+
+        chart = build_active_applied_pipeline_chart(get_records(self.applied, self.user))
+
+        self.assertEqual(chart["labels"], ["Applied", "Interview"])
+        self.assertEqual(chart["values"], [1.0, 2.0])
+
     def test_chat_handler_creates_default_chat_models(self):
         available_models = ChatHandler.available_models()
 
@@ -1214,6 +1283,28 @@ class DynamicRecordServiceTests(TestCase):
 
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0]["title"], "ML Engineer")
+
+    def test_portal_keyword_matching_understands_common_acronyms(self):
+        self.assertTrue(matches_any_keyword("Artificial Intelligence Research Engineer", ["AI"]))
+        self.assertTrue(matches_any_keyword("Machine Learning Scientist", ["ML"]))
+        self.assertTrue(matches_any_keyword("Computer Vision Researcher", ["CV"]))
+        self.assertFalse(matches_any_keyword("Research Chair in Physics", ["AI"]))
+
+    def test_portal_keyword_matching_allows_non_adjacent_phrase_tokens(self):
+        html = """
+        <html>
+            <body>
+                <div>
+                    <a href="/jobs/vision-lab">Computer Perception and Vision Research Engineer</a>
+                </div>
+            </body>
+        </html>
+        """
+
+        jobs = extract_jobs_from_portal_html("https://example.com/careers", html, ["computer vision"])
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["title"], "Computer Perception and Vision Research Engineer")
 
     def test_dashboard_recent_submissions_show_submission_date(self):
         save_record(

@@ -32,6 +32,11 @@
                 <p class="mt-2 text-3xl font-bold text-slate-900 dark:text-slate-100">{{ portal_count }}</p>
             </div>
         </div>
+        <div class="mt-6">
+            <label for="portal-job-search" class="text-sm font-semibold text-slate-800 dark:text-slate-100">Search fetched jobs</label>
+            <input id="portal-job-search" type="search" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white/85 px-4 py-3 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" placeholder="Try ML, computer vision, research, portal name, or URL">
+            <p id="portal-job-search-status" class="mt-2 text-sm font-medium text-slate-600 dark:text-slate-300" aria-live="polite"></p>
+        </div>
     </section>
 
     <section class="mt-8 overflow-hidden rounded-[2rem] border border-white/70 bg-white/85 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85">
@@ -48,7 +53,7 @@
                 </thead>
                 <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
                     {% for job in jobs %}
-                        <tr class="align-top">
+                        <tr class="portal-job-row align-top" data-search-text="{{ job.portal_name }} {{ job.portal_url }} {{ job.title }} {{ job.summary }} {{ job.url }}">
                             <td class="px-4 py-4 text-sm text-slate-700 dark:text-slate-200">
                                 <a href="{% url 'portal_jobs' job.portal_row_key %}" class="font-medium text-sky-700 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200">
                                     {{ job.portal_name|default:"Portal" }}
@@ -80,14 +85,83 @@
                             </td>
                         </tr>
                     {% empty %}
-                        <tr>
-                            <td colspan="5" class="px-4 py-10 text-center text-sm text-slate-600 dark:text-slate-300">
-                                No fetched jobs yet. Run a full portal fetch to populate this table.
-                            </td>
-                        </tr>
                     {% endfor %}
+                    <tr id="all-portal-empty-state" class="{% if jobs %}hidden {% endif %}">
+                        <td colspan="5" class="px-4 py-10 text-center text-sm text-slate-600 dark:text-slate-300">
+                            No fetched jobs match that search.
+                        </td>
+                    </tr>
                 </tbody>
             </table>
         </div>
     </section>
+    <script>
+        (() => {
+            const input = document.getElementById("portal-job-search");
+            const status = document.getElementById("portal-job-search-status");
+            const emptyState = document.getElementById("all-portal-empty-state");
+            if (!input || !status || !emptyState) {
+                return;
+            }
+            const equivalents = {
+                ai: ["artificial intelligence"],
+                "artificial intelligence": ["ai"],
+                ml: ["machine learning"],
+                "machine learning": ["ml"],
+                cv: ["computer vision"],
+                "computer vision": ["cv"],
+                nlp: ["natural language processing"],
+                "natural language processing": ["nlp"],
+            };
+            function normalize(value) {
+                return String(value || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^0-9a-z]+/g, " ").replace(/\s+/g, " ").trim();
+            }
+            function terms(value) {
+                return String(value || "").split(/[,;\n]+/).map((item) => item.trim()).filter(Boolean);
+            }
+            function variants(term) {
+                const normalized = normalize(term);
+                if (!normalized) {
+                    return [];
+                }
+                const values = [normalized, ...(equivalents[normalized] || [])];
+                term.split(/[\/|&]+/).forEach((part) => {
+                    const normalizedPart = normalize(part);
+                    if (normalizedPart) {
+                        values.push(normalizedPart);
+                    }
+                });
+                return [...new Set(values)];
+            }
+            function matches(searchText, term) {
+                const padded = ` ${normalize(searchText)} `;
+                return variants(term).some((variant) => {
+                    if (padded.includes(` ${variant} `)) {
+                        return true;
+                    }
+                    const tokens = variant.split(" ");
+                    return tokens.length > 1 && tokens.every((token) => padded.includes(` ${token} `));
+                });
+            }
+            function applyFilter() {
+                const activeTerms = terms(input.value);
+                const rows = [...document.querySelectorAll(".portal-job-row")];
+                let visible = 0;
+                rows.forEach((row) => {
+                    const keep = !activeTerms.length || activeTerms.some((term) => matches(row.dataset.searchText || "", term));
+                    row.classList.toggle("hidden", !keep);
+                    if (keep) {
+                        visible += 1;
+                    }
+                });
+                emptyState.classList.toggle("hidden", visible > 0);
+                emptyState.querySelector("td").textContent = rows.length
+                    ? "No fetched jobs match that search."
+                    : "No fetched jobs yet. Run a full portal fetch to populate this table.";
+                status.textContent = rows.length ? `${visible} of ${rows.length} fetched jobs visible` : "";
+            }
+            input.addEventListener("input", applyFilter);
+            applyFilter();
+        })();
+    </script>
 {% endblock %}

@@ -487,7 +487,7 @@ DASHBOARD_WIDGET_TEMPLATES = {
         "group-by-column": "application-progress",
         "metric-column": "",
         "aggregation": "Count Records",
-        "filters": "result=Pending",
+        "filters": "",
         "limit": "10",
         "metric": "Active applications",
         "notes": "Only includes applied jobs that are not rejected or withdrawn.",
@@ -844,6 +844,18 @@ def default_portal_keywords_text() -> str:
     return ", ".join(DEFAULT_PORTAL_KEYWORDS)
 
 
+KEYWORD_EQUIVALENTS = {
+    "ai": ("artificial intelligence",),
+    "artificial intelligence": ("ai",),
+    "ml": ("machine learning",),
+    "machine learning": ("ml",),
+    "cv": ("computer vision",),
+    "computer vision": ("cv",),
+    "nlp": ("natural language processing",),
+    "natural language processing": ("nlp",),
+}
+
+
 def normalize_search_text(value: Any) -> str:
     text = normalize_text(value)
     if not text:
@@ -859,6 +871,7 @@ def normalized_keyword_variants(keyword: str) -> list[str]:
     if not normalized_keyword:
         return []
     variants = [normalized_keyword]
+    variants.extend(KEYWORD_EQUIVALENTS.get(normalized_keyword, ()))
     raw_parts = [normalize_search_text(part) for part in re.split(r"[\/|&]+", normalize_text(keyword))]
     variants.extend(part for part in raw_parts if part)
     if " " not in normalized_keyword and len(normalized_keyword) >= 3:
@@ -883,7 +896,13 @@ def matches_normalized_keyword(normalized_text: str, keyword: str) -> bool:
     if not normalized_text:
         return False
     padded_text = f" {normalized_text} "
-    return any(f" {variant} " in padded_text for variant in normalized_keyword_variants(keyword))
+    for variant in normalized_keyword_variants(keyword):
+        if f" {variant} " in padded_text:
+            return True
+        variant_tokens = variant.split()
+        if len(variant_tokens) > 1 and all(f" {token} " in padded_text for token in variant_tokens):
+            return True
+    return False
 
 
 def matches_any_keyword(text: str, keywords: list[str] | tuple[str, ...]) -> bool:
@@ -3050,6 +3069,42 @@ def build_average_stage_timing_chart(applied_records: list[GroupedRecord], user)
     }
 
 
+def is_active_applied_record(record: GroupedRecord) -> bool:
+    inactive_values = {"rejected", "withdrawn"}
+    result = normalize_text(record.values.get("result")).lower()
+    progress = infer_progress(record).lower()
+    return result not in inactive_values and progress not in inactive_values
+
+
+def build_active_applied_pipeline_chart(applied_records: list[GroupedRecord]) -> dict[str, Any]:
+    active_records = [record for record in applied_records if is_active_applied_record(record)]
+    progress_counts = Counter(infer_progress(record) for record in active_records)
+    labels = [
+        stage
+        for stage in sorted(progress_counts, key=application_stage_sort_key)
+        if progress_counts[stage]
+    ]
+    values = [float(progress_counts[label]) for label in labels]
+    colors = [semantic_hex(label, alpha=0.72) for label in labels]
+    return {
+        "labels": labels,
+        "values": values,
+        "chart_config": {
+            "labels": labels,
+            "datasets": [
+                {
+                    "label": "Active applications",
+                    "data": values,
+                    "backgroundColor": colors,
+                    "borderColor": [semantic_hex(label) for label in labels],
+                    "borderWidth": 1,
+                    "borderRadius": 8,
+                }
+            ],
+        },
+    }
+
+
 def deadline_lead_bucket(lead_days: int) -> str:
     if lead_days < 0:
         return "Applied late"
@@ -3149,10 +3204,19 @@ def build_dashboard_widget(record: GroupedRecord, user) -> DashboardWidget:
         source_table = get_user_table(user, source_table_slug)
         table_columns = [column.slug for column in source_table.columns.filter(is_visible=True)]
         source_records = get_records(source_table, user)
+        if template_key == "applied-active-pipeline" and source_table_slug == "applied":
+            filters = ""
+            special_chart = build_active_applied_pipeline_chart(source_records)
+            labels = special_chart["labels"]
+            values = special_chart["values"]
+            chart_config = special_chart["chart_config"]
+            source_records = [record for record in source_records if is_active_applied_record(record)]
         filter_map = parse_filter_text(filters)
         if filter_map:
             source_records = [item for item in source_records if record_matches_filters(item, filter_map)]
-        if template_key == "applied-stage-timing" and source_table_slug == "applied":
+        if chart_config:
+            pass
+        elif template_key == "applied-stage-timing" and source_table_slug == "applied":
             special_chart = build_average_stage_timing_chart(source_records, user)
             labels = special_chart["labels"]
             values = special_chart["values"]
