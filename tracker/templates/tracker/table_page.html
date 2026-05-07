@@ -31,7 +31,11 @@
                 <p class="font-mono text-xs uppercase tracking-[0.25em] text-slate-400 dark:text-slate-950/75">Record count</p>
                 <p class="mt-2 text-3xl font-bold">{{ record_count }}</p>
             </div>
-            <form id="table-controls-form" method="get" class="grid gap-3 md:grid-cols-[auto_auto_auto_auto] md:items-end">
+            <form id="table-controls-form" method="get" class="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_auto_auto_auto_auto] md:items-end">
+                <div>
+                    <label for="id_q" class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Search</label>
+                    <input id="id_q" name="q" value="{{ search_query }}" type="text" placeholder="Search by keyword" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white px-4 py-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+                </div>
                 <div>
                     <label for="id_view" class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">View</label>
                     <select id="id_view" name="view" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white px-4 py-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">

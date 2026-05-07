@@ -512,6 +512,17 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
         ]
 
     def filter_records_for_display(self, records, table: DynamicTable):
+        keyword = (self.request.GET.get("q") or "").strip().lower()
+        if keyword:
+            tokens = [token for token in keyword.split() if token]
+            filtered = []
+            for record in records:
+                haystack_parts = [record.label]
+                haystack_parts.extend(str(value) for value in record.values.values() if value is not None)
+                haystack = " ".join(haystack_parts).lower()
+                if all(token in haystack for token in tokens):
+                    filtered.append(record)
+            records = filtered
         tag_filter = self.get_tag_filter(table)
         if not tag_filter:
             return records
@@ -699,6 +710,7 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
                 "sort_direction": self.get_sort_direction(table),
                 "sort_options": self.get_sort_options(table),
                 "tag_filter": self.get_tag_filter(table),
+                "search_query": (self.request.GET.get("q") or "").strip(),
                 "tag_filter_options": self.get_tag_filter_options(table),
                 "extra_actions": self.get_extra_actions(table),
                 "bulk_actions": self.get_bulk_actions(table),
