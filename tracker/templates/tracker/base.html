@@ -20,10 +20,15 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/htmx.org@1.9.10" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC" crossorigin="anonymous"></script>
     <script>
-        document.body.addEventListener('htmx:configRequest', (event) => {
+        document.addEventListener('htmx:configRequest', (event) => {
             const csrfToken = document.querySelector('input[name=csrfmiddlewaretoken]');
             if (csrfToken) {
                 event.detail.headers['X-CSRFToken'] = csrfToken.value;
+            }
+        });
+        document.addEventListener('htmx:afterSwap', (event) => {
+            if (event.target && event.target.id === 'app-content') {
+                window.scrollTo({ top: 0, behavior: 'auto' });
             }
         });
     </script>
