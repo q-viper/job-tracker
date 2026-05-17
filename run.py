@@ -5,6 +5,7 @@ from pathlib import Path
 
 import typer
 from dotenv import load_dotenv
+from django.core.management.base import CommandError
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 app = typer.Typer(
@@ -38,7 +39,16 @@ def serve(
     setup_django()
     from django.core.management import call_command
 
-    call_command("runserver", f"{host}:{port}")
+    try:
+        call_command("runserver", f"{host}:{port}")
+    except CommandError as exc:
+        message = str(exc)
+        if "permission" in message.lower() and "port" in message.lower():
+            raise typer.BadParameter(
+                f"{message} Try a higher unprivileged port, for example: "
+                f"`python3 run.py serve --port 8080`."
+            ) from exc
+        raise
 
 
 @app.command()

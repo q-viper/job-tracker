@@ -9,20 +9,31 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 load_dotenv(BASE_DIR / ".env")
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).lower() in {"1", "true", "yes", "on"}
+
+
+def _env_list(name: str, default: str = "") -> list[str]:
+    raw_value = os.getenv(name, default)
+    normalized = raw_value.replace("\n", ",").replace(" ", "")
+    return [item for item in normalized.split(",") if item]
+
 SECRET_KEY = os.getenv("SECRET_KEY", "local-dev-secret-key-change-me")
-DEBUG = os.getenv("DEBUG", "true").lower() in {"1", "true", "yes", "on"}
-ALLOWED_HOSTS = [
-    host.strip()
-    for host in os.getenv("ALLOWED_HOSTS", "127.0.0.1,localhost,testserver").split(",")
-    if host.strip()
-]
-CSRF_TRUSTED_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
-    if origin.strip()
-]
-USE_SECURE_COOKIES = os.getenv("USE_SECURE_COOKIES", "false").lower() in {"1", "true", "yes", "on"}
-SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", "false").lower() in {"1", "true", "yes", "on"}
+DEBUG = _env_bool("DEBUG", True)
+ALLOWED_HOSTS = _env_list("ALLOWED_HOSTS", "127.0.0.1,localhost,testserver")
+
+# Accept either a single origin or a list, via either key:
+# CSRF_TRUSTED_ORIGIN=https://example.com
+# CSRF_TRUSTED_ORIGINS=https://example.com,https://*.example.com
+CSRF_TRUSTED_ORIGINS = _env_list("CSRF_TRUSTED_ORIGINS")
+if not CSRF_TRUSTED_ORIGINS:
+    single_origin = os.getenv("CSRF_TRUSTED_ORIGIN", "").strip()
+    if single_origin:
+        CSRF_TRUSTED_ORIGINS = [single_origin]
+
+USE_SECURE_COOKIES = _env_bool("USE_SECURE_COOKIES", False)
+SECURE_SSL_REDIRECT = _env_bool("SECURE_SSL_REDIRECT", False)
 
 
 # Application definition
