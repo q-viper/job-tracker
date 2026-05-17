@@ -44,3 +44,17 @@ def status_chip_classes(value: str) -> str:
 @register.filter
 def inferred_progress(record) -> str:
     return infer_progress(record)
+
+
+@register.filter
+def is_compact_record_field(field_name: str) -> bool:
+    normalized = (field_name or "").strip().lower()
+    return normalized in {
+        "source_row_key",
+        "date",
+        "deadline",
+        "created_at",
+        "updated_at",
+        "application-date",
+        "applied-date",
+    } or normalized.endswith("_date") or normalized.endswith("-date")

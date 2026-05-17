@@ -4,14 +4,14 @@
 {% block title %}{{ page_title }} | Job Tracker{% endblock %}
 
 {% block content %}
-    <section class="mx-auto max-w-4xl rounded-[2rem] border border-white/70 bg-white/85 p-6 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85 sm:p-8">
+    <section class="mx-auto max-w-4xl rounded-[2rem] border border-white/70 bg-white/85 p-6 pb-28 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85 sm:p-8 sm:pb-32">
         <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div>
                 <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">{{ table.name }}</p>
                 <h2 class="mt-2 text-3xl font-bold tracking-tight dark:text-slate-100">{{ page_title }}</h2>
                 <p class="mt-3 text-sm text-slate-600 dark:text-slate-300">{{ page_description }}</p>
             </div>
-            <div class="flex flex-wrap gap-3 sm:justify-end">
+            <div class="hidden flex-wrap gap-3 sm:justify-end lg:flex">
                 <button form="record-form" class="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400" type="submit">{% if is_edit %}Save changes{% else %}Create entry{% endif %}</button>
                 <a href="{{ return_url }}" hx-get="{{ return_url }}" hx-target="#app-content" hx-swap="outerHTML" hx-push-url="true" class="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Cancel</a>
             </div>
@@ -26,10 +26,10 @@
             </div>
         {% endif %}
 
-        <form id="record-form" hx-post="{{ request.path }}" hx-target="#app-content" hx-swap="outerHTML" class="mt-8 space-y-6">
+        <form id="record-form" hx-post="{{ request.path }}" hx-target="#app-content" hx-swap="outerHTML" class="mt-8 grid grid-cols-1 gap-6 md:grid-cols-2">
             {% csrf_token %}
             {% for field in form %}
-                <div class="rounded-3xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-700 dark:bg-slate-950/60">
+                <div class="{% if field.name|is_compact_record_field %}md:col-span-1{% else %}md:col-span-2{% endif %} rounded-3xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-700 dark:bg-slate-950/60">
                     <label class="text-sm font-semibold text-slate-800 dark:text-slate-100" for="{{ field.id_for_label }}">{{ field.label }}</label>
                     <div>{{ field }}</div>
                     {% if field.name == 'tags' and available_job_tags %}
@@ -50,12 +50,19 @@
                     {% endif %}
                 </div>
             {% endfor %}
-            <div class="flex flex-wrap gap-3">
+            <div class="hidden md:col-span-2 md:flex md:flex-wrap md:gap-3 lg:hidden">
                 <button class="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400" type="submit">{% if is_edit %}Save changes{% else %}Create entry{% endif %}</button>
                 <a href="{{ return_url }}" hx-get="{{ return_url }}" hx-target="#app-content" hx-swap="outerHTML" hx-push-url="true" class="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Cancel</a>
             </div>
         </form>
     </section>
+
+    <div class="fixed bottom-4 left-1/2 z-40 w-[calc(100%-1.25rem)] max-w-3xl -translate-x-1/2 rounded-2xl border border-slate-200/80 bg-white/95 p-3 shadow-2xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/95 sm:bottom-5 sm:w-auto">
+        <div class="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
+            <a href="{{ return_url }}" hx-get="{{ return_url }}" hx-target="#app-content" hx-swap="outerHTML" hx-push-url="true" class="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Cancel</a>
+            <button form="record-form" class="rounded-full bg-slate-950 px-5 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400" type="submit">{% if is_edit %}Save changes{% else %}Create entry{% endif %}</button>
+        </div>
+    </div>
 
     {% if source_records_json %}
         <script>
