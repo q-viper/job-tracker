@@ -801,59 +801,7 @@ def build_heuristic_answer(
     return None
 
 
-@lru_cache(maxsize=4)
-def get_local_generation_pipeline(model_name: str):
-    if os.getenv("RAG_ENABLE_LOCAL_MODEL", "true").lower() not in {"1", "true", "yes", "on"}:
-        return None
-    try:
-        from transformers import pipeline
-    except Exception:
-        return None
-
-    model_name = model_name.strip() or os.getenv("RAG_MODEL_NAME", "google/flan-t5-small").strip() or "google/flan-t5-small"
-    try:
-        return pipeline(
-            "text2text-generation",
-            model=model_name,
-            tokenizer=model_name,
-            device=-1,
-        )
-    except Exception:
-        return None
-
-
-def should_use_local_model(query: str, *, document_text: str = "", chat_model: ChatModelConfig | None = None) -> bool:
-    if chat_model and chat_model.mode == ChatModelConfig.Mode.LIST:
-        return False
-    if smalltalk_answer_for_query(query):
-        return False
-    if is_document_matching_query(query, document_text=document_text):
-        return False
-    lowered = query.lower()
-    structured_terms = {
-        "what",
-        "which",
-        "show",
-        "fetch",
-        "filter",
-        "deadline",
-        "deadlines",
-        "interview",
-        "applied",
-        "jobs",
-        "positions",
-        "match",
-        "matching",
-        "count",
-        "how many",
-        "cover letter",
-        "deadline",
-        "deadlines",
-    }
-    return not any(term in lowered for term in structured_terms)
-
-
-def answer_with_local_model(
+def answer_with_ai(
     query: str,
     matches: list[tuple[RagDocument, float]],
     *,
@@ -861,8 +809,7 @@ def answer_with_local_model(
     document_name: str = "",
     document_text: str = "",
 ) -> str | None:
-    generator = get_local_generation_pipeline(model_name or os.getenv("RAG_MODEL_NAME", "google/flan-t5-small"))
-    if generator is None or (not matches and not document_text):
+    if not matches and not document_text:
         return None
 
     context_parts: list[str] = []
@@ -888,9 +835,15 @@ def answer_with_local_model(
             f"Context:\n{context}\n\nQuestion: {query}\nAnswer:"
         )
     try:
-        result = generator(prompt, max_new_tokens=180, do_sample=False)
-        if result and result[0].get("generated_text"):
-            generated = result[0]["generated_text"].strip()
+        from g4f.client import Client
+        client = Client()
+        response = client.chat.completions.create(
+            model=model_name or "gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        generated = response.choices[0].message.content
+        if generated:
+            generated = generated.strip()
             if len(generated) < 12 or re.fullmatch(r"[\[\]\d\W]+", generated):
                 return None
             return generated
@@ -995,16 +948,16 @@ def chat_with_rag(
         document_name=uploaded_document_name,
         document_text=uploaded_document_text,
     )
-    model_name = normalize_text(chat_model.model_name) if chat_model else os.getenv("RAG_MODEL_NAME", "google/flan-t5-small")
+    model_name = normalize_text(chat_model.model_name) if chat_model else os.getenv("RAG_MODEL_NAME", "gpt-4o")
     model_answer = (
-        answer_with_local_model(
+        answer_with_ai(
             query,
             matches,
             model_name=model_name,
             document_name=uploaded_document_name,
             document_text=uploaded_document_text,
         )
-        if should_use_local_model(query, document_text=uploaded_document_text, chat_model=chat_model)
+        if not smalltalk_answer_for_query(query)
         else None
     )
     answer = heuristic_answer or model_answer or fallback_answer(

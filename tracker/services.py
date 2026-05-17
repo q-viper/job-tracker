@@ -990,11 +990,18 @@ def validate_safe_external_url(url: str) -> None:
 
 def safe_get_url(url: str, timeout: int = 15) -> requests.Response:
     validate_safe_external_url(url)
-    response = requests.get(
+    import cloudscraper
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'mobile': False,
+        }
+    )
+    response = scraper.get(
         url,
         timeout=timeout,
         headers={
-            "User-Agent": DEFAULT_HTTP_USER_AGENT,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
             "Cache-Control": "no-cache",

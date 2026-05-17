@@ -13,7 +13,7 @@
             </div>
             <div class="flex flex-wrap gap-3 sm:justify-end">
                 <button form="record-form" class="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400" type="submit">{% if is_edit %}Save changes{% else %}Create entry{% endif %}</button>
-                <a href="{{ return_url }}" class="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Cancel</a>
+                <a href="{{ return_url }}" hx-get="{{ return_url }}" hx-target="#app-content" hx-swap="outerHTML" hx-push-url="true" class="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Cancel</a>
             </div>
         </div>
 
@@ -26,7 +26,7 @@
             </div>
         {% endif %}
 
-        <form id="record-form" method="post" class="mt-8 space-y-6">
+        <form id="record-form" hx-post="{{ request.path }}" hx-target="#app-content" hx-swap="outerHTML" class="mt-8 space-y-6">
             {% csrf_token %}
             {% for field in form %}
                 <div class="rounded-3xl border border-slate-200/80 bg-slate-50 p-5 dark:border-slate-700 dark:bg-slate-950/60">
@@ -52,7 +52,7 @@
             {% endfor %}
             <div class="flex flex-wrap gap-3">
                 <button class="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400" type="submit">{% if is_edit %}Save changes{% else %}Create entry{% endif %}</button>
-                <a href="{{ return_url }}" class="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Cancel</a>
+                <a href="{{ return_url }}" hx-get="{{ return_url }}" hx-target="#app-content" hx-swap="outerHTML" hx-push-url="true" class="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Cancel</a>
             </div>
         </form>
     </section>

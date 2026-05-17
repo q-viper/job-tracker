@@ -79,8 +79,8 @@
                                 </div>
                             </div>
                             <div class="flex flex-wrap gap-3">
-                                <a href="{% url 'workspace_table' item.table.slug %}" class="rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800">Browse data</a>
-                                <a href="{% url 'manage_table_columns' item.table.slug %}" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50">Columns</a>
+                                <a href="{% url 'workspace_table' item.table.slug %}" hx-get="{% url 'workspace_table' item.table.slug %}" hx-target="#app-content" hx-swap="outerHTML" hx-push-url="true" class="rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800">Browse data</a>
+                                <a href="{% url 'manage_table_columns' item.table.slug %}" hx-get="{% url 'manage_table_columns' item.table.slug %}" hx-target="#app-content" hx-swap="outerHTML" hx-push-url="true" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50">Columns</a>
                             </div>
                         </div>
                     </div>
