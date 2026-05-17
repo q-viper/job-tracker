@@ -31,6 +31,28 @@
                 window.scrollTo({ top: 0, behavior: 'auto' });
             }
         });
+        document.addEventListener('keydown', (event) => {
+            const target = event.target;
+            if (!target || !target.matches || !target.matches('input[data-picker-only="true"]')) {
+                return;
+            }
+            const allowedKeys = new Set(["Tab", "Shift", "Control", "Alt", "Meta", "Escape", "Enter"]);
+            if (!allowedKeys.has(event.key)) {
+                event.preventDefault();
+            }
+        });
+        document.addEventListener('paste', (event) => {
+            const target = event.target;
+            if (target && target.matches && target.matches('input[data-picker-only="true"]')) {
+                event.preventDefault();
+            }
+        });
+        document.addEventListener('drop', (event) => {
+            const target = event.target;
+            if (target && target.matches && target.matches('input[data-picker-only="true"]')) {
+                event.preventDefault();
+            }
+        });
     </script>
     <script>
         tailwind.config = {

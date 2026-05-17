@@ -69,6 +69,7 @@ from .services import (
     make_unique_table_slug,
     move_to_applied,
     parse_tag_names,
+    replace_applied_history_events,
     refresh_all_portal_jobs_for_user,
     refresh_portal_jobs,
     remove_application_tags,
@@ -814,6 +815,16 @@ class BaseRecordFormView(LoginRequiredMixin, WorkspaceReadyMixin, FormView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         table = self.get_table()
+        form = context.get("form")
+        regular_fields = []
+        date_fields = []
+        if form is not None:
+            for field in form:
+                if self._is_date_like_field(field.name):
+                    date_fields.append(field)
+                else:
+                    regular_fields.append(field)
+            date_fields.sort(key=lambda field: self._date_field_rank(field.name))
         context.update(
             {
                 "table": table,
@@ -825,9 +836,50 @@ class BaseRecordFormView(LoginRequiredMixin, WorkspaceReadyMixin, FormView):
                 "available_job_tags": getattr(context.get("form"), "available_tags", []),
                 "dashboard_columns_json": json.dumps(getattr(context.get("form"), "dashboard_columns_map", {})),
                 "url_inference_api_url": reverse("api_infer_record_from_url"),
+                "form_regular_fields": regular_fields,
+                "form_date_fields": date_fields,
             }
         )
         return context
+
+    @staticmethod
+    def _is_date_like_field(field_name: str) -> bool:
+        normalized = (field_name or "").strip().lower()
+        return (
+            normalized in {"date", "deadline", "result-on", "created_at", "updated_at", "application-date", "applied-date"}
+            or normalized.endswith("_date")
+            or normalized.endswith("-date")
+        )
+
+    @staticmethod
+    def _date_field_rank(field_name: str) -> tuple[int, str]:
+        normalized = (field_name or "").strip().lower()
+        history_stage_order = [
+            "history_applied_date",
+            "history_screening_date",
+            "history_interview_date",
+            "history_technical_interview_date",
+            "history_assignment_date",
+            "history_offer_date",
+            "history_accepted_date",
+            "history_rejected_date",
+            "history_withdrawn_date",
+        ]
+        priority = {
+            "source_row_key": 0,
+            "applied-date": 10,
+            "application-date": 10,
+            "date": 10,
+            "deadline": 20,
+            "result-on": 25,
+            "created_at": 30,
+            "updated_at": 40,
+        }
+        if normalized in history_stage_order:
+            return (50 + history_stage_order.index(normalized), normalized)
+        if normalized.startswith("history_") and normalized.endswith("_date"):
+            return (80, normalized)
+        return (priority.get(normalized, 90), normalized)
 
     def sync_form_tags(self, form, row_key) -> None:
         raw_tags = form.cleaned_data.get("tags")
@@ -840,6 +892,9 @@ class BaseRecordFormView(LoginRequiredMixin, WorkspaceReadyMixin, FormView):
             parse_tag_names(raw_tags),
         )
 
+    def after_record_saved(self, form, row_key) -> None:
+        return
+
     def form_valid(self, form):
         table = self.get_table()
         if not table.columns.exists():
@@ -848,7 +903,7 @@ class BaseRecordFormView(LoginRequiredMixin, WorkspaceReadyMixin, FormView):
         payload = {
             key: value
             for key, value in form.cleaned_data.items()
-            if key != "tags"
+            if key != "tags" and not key.startswith("history_")
         }
         row_uuid = save_record(
             table,
@@ -857,6 +912,7 @@ class BaseRecordFormView(LoginRequiredMixin, WorkspaceReadyMixin, FormView):
             row_key=self.kwargs.get("row_key"),
         )
         self.sync_form_tags(form, row_uuid)
+        self.after_record_saved(form, row_uuid)
         messages.success(self.request, f"{table.name} entry saved.")
         return redirect(self.get_success_url())
 
@@ -931,6 +987,19 @@ class AppliedUpdateView(BaseRecordFormView):
     page_title = "Edit Applied Entry"
     page_description = "Update progress, results, cover letter text, or CV text."
     nav_section = "applied"
+
+    def after_record_saved(self, form, row_key) -> None:
+        history_dates = {}
+        for stage in form.HISTORY_STAGE_CHOICES:
+            field_name = form.history_field_name(stage)
+            selected_date = form.cleaned_data.get(field_name)
+            if selected_date:
+                history_dates[stage] = selected_date
+        fallback_applied_date = form.cleaned_data.get("date")
+        if fallback_applied_date and "Applied" not in history_dates:
+            history_dates["Applied"] = fallback_applied_date
+        if history_dates:
+            replace_applied_history_events(self.request.user, row_key, history_dates)
 
 
 class BaseJobDetailView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):

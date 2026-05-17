@@ -58,3 +58,9 @@ def is_compact_record_field(field_name: str) -> bool:
         "application-date",
         "applied-date",
     } or normalized.endswith("_date") or normalized.endswith("-date")
+
+
+@register.filter
+def is_radio_choice_field(bound_field) -> bool:
+    widget = getattr(getattr(bound_field, "field", None), "widget", None)
+    return widget is not None and widget.__class__.__name__ == "RadioSelect"

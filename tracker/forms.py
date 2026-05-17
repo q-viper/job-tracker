@@ -1,16 +1,31 @@
 from __future__ import annotations
 
+from datetime import date, datetime
+
 from django import forms
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.core.exceptions import ValidationError
 
 from .models import ApplicationTag, DashboardBoard, DynamicColumn, DynamicTable, User
-from .services import get_application_tags
+from .services import APPLICATION_STAGE_ORDER, get_application_history_events, get_application_tags
+
+FORM_APPLICATION_STAGE_ORDER = [stage for stage in APPLICATION_STAGE_ORDER if stage != "To Apply"]
+
+APPLICATION_RESULT_ORDER = [
+    "Pending",
+    "Offer",
+    "Accepted",
+    "Rejected",
+    "Withdrawn",
+]
 
 
 def apply_widget_classes(field: forms.Field) -> None:
     if isinstance(field.widget, forms.CheckboxInput):
         field.widget.attrs["class"] = "mt-2 h-5 w-5 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+        return
+    if isinstance(field.widget, forms.RadioSelect):
+        field.widget.attrs["class"] = "peer sr-only"
         return
     classes = (
         "mt-2 w-full rounded-2xl border border-slate-300/80 bg-white/85 px-4 py-3 "
@@ -19,6 +34,9 @@ def apply_widget_classes(field: forms.Field) -> None:
     )
     if isinstance(field.widget, forms.Textarea):
         field.widget.attrs["rows"] = field.widget.attrs.get("rows", 5)
+    if isinstance(field.widget, (forms.DateInput, forms.TimeInput, forms.DateTimeInput)):
+        field.widget.attrs["data-picker-only"] = "true"
+        field.widget.attrs["autocomplete"] = "off"
     field.widget.attrs["class"] = classes
 
 
@@ -189,8 +207,49 @@ class DynamicRecordForm(forms.Form):
 
         if table.slug == "dashboard" and user is not None:
             self._configure_dashboard_fields()
+        self._normalize_initial_dates()
+
+    @staticmethod
+    def _is_date_like_slug(slug: str) -> bool:
+        normalized = (slug or "").strip().lower()
+        return (
+            normalized in {"date", "deadline", "result-on", "created_at", "updated_at"}
+            or normalized.endswith("_date")
+            or normalized.endswith("-date")
+            or normalized.endswith("-on")
+        )
+
+    @staticmethod
+    def _parse_date_like_value(raw_value):
+        if raw_value in {None, ""}:
+            return None
+        if isinstance(raw_value, datetime):
+            return raw_value.date()
+        if isinstance(raw_value, date):
+            return raw_value
+        text = str(raw_value).strip()
+        if not text:
+            return None
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d.%m.%Y", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(text, fmt).date()
+            except ValueError:
+                continue
+        try:
+            return datetime.fromisoformat(text).date()
+        except ValueError:
+            return None
+
+    def _normalize_initial_dates(self) -> None:
+        for field_name, field in self.fields.items():
+            if not isinstance(field, forms.DateField):
+                continue
+            parsed = self._parse_date_like_value(self.initial.get(field_name))
+            if parsed:
+                self.initial[field_name] = parsed
 
     def _build_field(self, column: DynamicColumn) -> forms.Field:
+        is_date_like = column.data_type == DynamicColumn.DataType.DATE or self._is_date_like_slug(column.slug)
         if column.data_type == DynamicColumn.DataType.LONG_TEXT:
             field = forms.CharField(
                 required=column.is_required,
@@ -198,7 +257,7 @@ class DynamicRecordForm(forms.Form):
                 help_text=column.help_text,
                 widget=forms.Textarea(attrs={"placeholder": column.placeholder or column.name}),
             )
-        elif column.data_type == DynamicColumn.DataType.DATE:
+        elif is_date_like:
             field = forms.DateField(
                 required=column.is_required,
                 label=column.name,
@@ -293,6 +352,8 @@ class JobRecordForm(DynamicRecordForm):
     def __init__(self, *args, table: DynamicTable, user=None, row_key=None, **kwargs):
         super().__init__(*args, table=table, user=user, row_key=row_key, **kwargs)
         self.available_tags: list[str] = []
+        if table.slug in {"to-apply", "applied"}:
+            self._configure_job_state_fields()
         if table.slug not in {"to-apply", "applied"} or user is None:
             return
 
@@ -313,6 +374,36 @@ class JobRecordForm(DynamicRecordForm):
         )
         if self.fields["tags"].initial:
             self.initial["tags"] = self.fields["tags"].initial
+
+    @staticmethod
+    def _ordered_choices(choices: list[tuple[str, str]], preferred_order: list[str]) -> list[tuple[str, str]]:
+        normalized_rank = {name.lower(): idx for idx, name in enumerate(preferred_order)}
+        ranked = []
+        unranked = []
+        for value, label in choices:
+            text = str(label or value or "").strip()
+            rank = normalized_rank.get(text.lower())
+            entry = (str(value), str(label))
+            if rank is None:
+                unranked.append(entry)
+            else:
+                ranked.append((rank, entry))
+        ranked.sort(key=lambda item: item[0])
+        return [entry for _, entry in ranked] + unranked
+
+    def _set_state_field_widget(self, field_name: str, preferred_order: list[str]) -> None:
+        field = self.fields.get(field_name)
+        if not isinstance(field, forms.ChoiceField):
+            return
+        existing_choices = list(field.choices)
+        non_empty = [(value, label) for value, label in existing_choices if str(value).strip()]
+        field.choices = self._ordered_choices(non_empty, preferred_order)
+        field.widget = forms.RadioSelect(choices=field.choices)
+        apply_widget_classes(field)
+
+    def _configure_job_state_fields(self) -> None:
+        self._set_state_field_widget("application-progress", FORM_APPLICATION_STAGE_ORDER)
+        self._set_state_field_widget("result", APPLICATION_RESULT_ORDER)
 
 
 class ToApplyForm(JobRecordForm):
@@ -344,7 +435,35 @@ class AppliedCreateForm(JobRecordForm):
 
 
 class AppliedUpdateForm(JobRecordForm):
+    HISTORY_STAGE_CHOICES = FORM_APPLICATION_STAGE_ORDER
+
+    @staticmethod
+    def history_field_name(stage: str) -> str:
+        return f"history_{stage.strip().lower().replace(' ', '_')}_date"
+
     def __init__(self, *args, table: DynamicTable, user=None, row_key=None, **kwargs):
         super().__init__(*args, table=table, user=user, row_key=row_key, **kwargs)
         if "url" in self.fields:
             self.fields["url"].required = False
+        if not user or not row_key:
+            return
+        events = get_application_history_events(user, "applied", row_key)
+        stage_dates: dict[str, date] = {}
+        for event in events:
+            stage = (event.to_stage or "").strip()
+            if not stage or stage not in self.HISTORY_STAGE_CHOICES or stage in stage_dates:
+                continue
+            stage_dates[stage] = event.occurred_at.date()
+
+        for stage in self.HISTORY_STAGE_CHOICES:
+            field_name = self.history_field_name(stage)
+            self.fields[field_name] = forms.DateField(
+                required=False,
+                label=f"{stage} on",
+                help_text="Optional. Pick the date this stage was reached.",
+                widget=forms.DateInput(attrs={"type": "date"}),
+                initial=stage_dates.get(stage),
+            )
+            apply_widget_classes(self.fields[field_name])
+            if stage_dates.get(stage):
+                self.initial[field_name] = stage_dates[stage]

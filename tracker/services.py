@@ -2304,6 +2304,72 @@ def get_application_history_events(user, table_slug: str, row_key: UUID | str) -
     )
 
 
+def replace_applied_history_events(user, row_key: UUID | str, stage_dates: dict[str, Any]) -> None:
+    row_uuid = UUID(str(row_key))
+    timeline_items: list[tuple[str, datetime]] = []
+    for stage_name, raw_value in (stage_dates or {}).items():
+        stage = normalize_text(stage_name)
+        if not stage or stage == "To Apply":
+            continue
+        occurred_at = history_datetime_from_date_value(raw_value)
+        if not occurred_at:
+            continue
+        timeline_items.append((stage, occurred_at))
+
+    if not timeline_items:
+        return
+
+    by_stage: dict[str, datetime] = {}
+    for stage, occurred_at in sorted(timeline_items, key=lambda item: (item[1], application_stage_sort_key(item[0]))):
+        by_stage.setdefault(stage, occurred_at)
+
+    applied_at = by_stage.get("Applied")
+    if not applied_at:
+        earliest = min(by_stage.values())
+        applied_at = earliest
+        by_stage["Applied"] = earliest
+
+    ordered_items = sorted(by_stage.items(), key=lambda item: (item[1], application_stage_sort_key(item[0])))
+    if ordered_items[0][0] != "Applied":
+        ordered_items = [("Applied", applied_at)] + [item for item in ordered_items if item[0] != "Applied"]
+
+    ApplicationHistoryEvent.objects.filter(
+        user=user,
+        table_slug="applied",
+        record_row_key=row_uuid,
+    ).delete()
+
+    previous_stage = "Applied"
+    previous_time = applied_at
+    record_application_history_event(
+        user,
+        "applied",
+        row_uuid,
+        ApplicationHistoryEvent.EventType.APPLIED,
+        to_stage="Applied",
+        occurred_at=applied_at,
+        notes="Application submitted.",
+    )
+
+    for stage, occurred_at in ordered_items:
+        if stage == "Applied":
+            continue
+        if occurred_at <= previous_time:
+            occurred_at = previous_time + timedelta(minutes=1)
+        record_application_history_event(
+            user,
+            "applied",
+            row_uuid,
+            ApplicationHistoryEvent.EventType.STAGE_CHANGE,
+            from_stage=previous_stage,
+            to_stage=stage,
+            occurred_at=occurred_at,
+            notes=f"Progress updated to {stage}.",
+        )
+        previous_stage = stage
+        previous_time = occurred_at
+
+
 def get_application_history_events_map(
     user,
     table_slug: str,
