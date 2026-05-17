@@ -111,20 +111,24 @@
             </nav>
         </header>
 
-        {% if messages %}
-            <div class="mb-6 space-y-3">
-                {% for message in messages %}
-                    <div class="rounded-2xl border border-white/70 bg-white/80 px-4 py-3 text-sm shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/80 dark:text-slate-100">
-                        {{ message }}
-                    </div>
-                {% endfor %}
-            </div>
-        {% endif %}
+    {% endif %}
 
-        <main id="main-content">
-            {% block content %}{% endblock %}
-        </main>
-    </div>
+    {% if messages %}
+        <div class="mb-6 space-y-3">
+            {% for message in messages %}
+                <div class="rounded-2xl border border-white/70 bg-white/80 px-4 py-3 text-sm shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/80 dark:text-slate-100">
+                    {{ message }}
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    <main id="main-content">
+        {% block content %}{% endblock %}
+    </main>
+</div>
+{% if 'HTTP_HX_REQUEST' in request.META %}
+{% else %}
     {% if request.user.is_authenticated %}
         <div id="quick-actions-shell" class="fixed bottom-4 left-4 z-50">
             <div class="relative h-64 w-64 pointer-events-none">
