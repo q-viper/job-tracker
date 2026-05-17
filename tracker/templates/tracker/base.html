@@ -53,9 +53,9 @@
     {{ quassi_models|json_script:"quassi-models-data" }}
 
     <div id="app-content" class="mx-auto w-full max-w-none px-2 py-3 sm:px-4 sm:py-4 lg:px-5 xl:px-8 2xl:px-10">
-                {% include "tracker/_top_nav.html" %}`r`n
+{% endif %}
 
-    {% endif %}
+    {% include "tracker/_top_nav.html" %}
 
     {% if messages %}
         <div class="mb-6 space-y-3">
