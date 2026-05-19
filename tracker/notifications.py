@@ -46,6 +46,20 @@ def should_notify_now(user: User, now: datetime, force: bool) -> bool:
     return True
 
 
+def notification_due_users(now: datetime | None = None):
+    now = now or timezone.localtime()
+    today = now.date()
+    return [
+        user
+        for user in User.objects.filter(notify_enabled=True)
+        if should_notify_now(user, now, force=False)
+        and (
+            not user.last_notification_sent_at
+            or timezone.localtime(user.last_notification_sent_at).date() != today
+        )
+    ]
+
+
 def upcoming_deadlines_for_user(user: User):
     try:
         table = get_user_table(user, "to-apply")
@@ -224,8 +238,10 @@ def send_notification_to_user(
 
 def run_notifications(*, force: bool = False, dry_run: bool = False) -> int:
     now = timezone.localtime()
-    users = User.objects.filter(notify_enabled=True)
+    users = list(User.objects.filter(notify_enabled=True)) if force else notification_due_users(now)
     processed = 0
+    if not users:
+        return 0
     if not dry_run and not SMTPHandler.is_configured():
         logger.info("SMTP is not configured. Skipping email delivery features.")
         return 0

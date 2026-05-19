@@ -2,25 +2,31 @@ from __future__ import annotations
 
 import os
 import threading
-from datetime import timedelta
 
-from django.utils import timezone
+from loguru import logger
 
-from .notifications import run_notifications
+from .notifications import notification_due_users, run_notifications
 
 _lock = threading.Lock()
 _started = False
+_stop_event = threading.Event()
+
+
+def notification_scheduler_poll_seconds() -> int:
+    try:
+        return max(int(os.getenv("NOTIFICATION_SCHEDULER_POLL_SECONDS", "60")), 10)
+    except (TypeError, ValueError):
+        return 60
 
 
 def _notifications_loop() -> None:
     while True:
         try:
-            run_notifications(force=False, dry_run=False)
-        except Exception:
-            pass
-        next_run = timezone.now() + timedelta(hours=1)
-        sleep_seconds = max((next_run - timezone.now()).total_seconds(), 300)
-        threading.Event().wait(sleep_seconds)
+            if notification_due_users():
+                run_notifications(force=False, dry_run=False)
+        except Exception as exc:
+            logger.exception(f"Scheduled notification check failed: {exc}")
+        _stop_event.wait(notification_scheduler_poll_seconds())
 
 
 def start_notification_scheduler() -> None:

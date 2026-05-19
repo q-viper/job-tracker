@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, time
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -9,8 +10,10 @@ from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 from openpyxl import Workbook, load_workbook
 
+from .apps import should_start_notification_scheduler
 from .chat_handler import ChatHandler
 from .forms import AppliedCreateForm, AppliedUpdateForm
 from .models import (
@@ -25,7 +28,7 @@ from .models import (
     DynamicTable,
     PortalJobSuggestion,
 )
-from .notifications import run_notifications
+from .notifications import notification_due_users, run_notifications
 from .rag import chat_with_rag
 from .services import (
     aggregate_records,
@@ -1501,6 +1504,33 @@ class NotificationWorkflowTests(TestCase):
         self.assertIn("No upcoming deadlines were found", body)
         self.assertIn("No new portal matches were found", body)
         self.assertIsNotNone(self.user.last_notification_sent_at)
+
+    def test_notification_due_users_respects_configured_daily_time(self):
+        early = timezone.make_aware(datetime(2026, 5, 19, 7, 59))
+        due = timezone.make_aware(datetime(2026, 5, 19, 8, 0))
+        self.user.notify_time = time(hour=8, minute=0)
+        self.user.last_notification_sent_at = None
+        self.user.save(update_fields=["notify_time", "last_notification_sent_at"])
+
+        self.assertEqual(notification_due_users(early), [])
+        self.assertEqual(notification_due_users(due), [self.user])
+
+        self.user.last_notification_sent_at = due
+        self.user.save(update_fields=["last_notification_sent_at"])
+
+        self.assertEqual(notification_due_users(due), [])
+
+    def test_scheduler_starts_for_app_runtime_but_not_management_commands(self):
+        self.assertTrue(should_start_notification_scheduler(["gunicorn", "config.wsgi"]))
+        with patch.dict("os.environ", {"RUN_MAIN": "true"}):
+            self.assertTrue(should_start_notification_scheduler(["manage.py", "runserver"]))
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(should_start_notification_scheduler(["manage.py", "runserver"]))
+            self.assertFalse(should_start_notification_scheduler(["manage.py", "migrate"]))
+            self.assertFalse(should_start_notification_scheduler(["manage.py", "test"]))
+            self.assertFalse(should_start_notification_scheduler(["run.py", "notify"]))
+        with patch.dict("os.environ", {"DISABLE_NOTIFICATION_SCHEDULER": "1"}):
+            self.assertFalse(should_start_notification_scheduler(["gunicorn", "config.wsgi"]))
 
     def test_account_settings_send_notification_now_uses_manual_send_path(self):
         self.client.force_login(self.user)
