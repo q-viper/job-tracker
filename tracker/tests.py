@@ -63,6 +63,17 @@ class DummySMTPContext:
         self.sent_messages.append((recipient, subject, body))
 
 
+class DummySelectiveFailSMTPContext(DummySMTPContext):
+    def __init__(self, failed_recipient: str):
+        super().__init__()
+        self.failed_recipient = failed_recipient
+
+    def send_email(self, recipient: str, subject: str, body: str) -> None:
+        if recipient == self.failed_recipient:
+            raise RuntimeError("recipient refused")
+        super().send_email(recipient, subject, body)
+
+
 class DynamicRecordServiceTests(TestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
@@ -1505,6 +1516,34 @@ class NotificationWorkflowTests(TestCase):
         self.assertIn("No new portal matches were found", body)
         self.assertIsNotNone(self.user.last_notification_sent_at)
 
+    def test_run_notifications_continues_after_one_recipient_fails(self):
+        blocked_user = get_user_model().objects.create_user(
+            username="blocked",
+            email="blocked@example.com",
+            password="TestPassword123!",
+        )
+        blocked_user.notification_email = "blocked@example.com"
+        blocked_user.notify_enabled = True
+        blocked_user.auto_fetch_portals = False
+        blocked_user.save()
+        self.user.auto_fetch_portals = False
+        self.user.save(update_fields=["auto_fetch_portals"])
+        smtp_context = DummySelectiveFailSMTPContext("blocked@example.com")
+
+        with (
+            patch("tracker.notifications.SMTPHandler.is_configured", return_value=True),
+            patch("tracker.notifications.SMTPHandler.from_env", return_value=smtp_context),
+        ):
+            processed = run_notifications(force=False, dry_run=False)
+
+        self.user.refresh_from_db()
+        blocked_user.refresh_from_db()
+        self.assertEqual(processed, 1)
+        self.assertEqual(len(smtp_context.sent_messages), 1)
+        self.assertEqual(smtp_context.sent_messages[0][0], "notifier@example.com")
+        self.assertIsNotNone(self.user.last_notification_sent_at)
+        self.assertIsNone(blocked_user.last_notification_sent_at)
+
     def test_notification_due_users_respects_configured_daily_time(self):
         early = timezone.make_aware(datetime(2026, 5, 19, 7, 59))
         due = timezone.make_aware(datetime(2026, 5, 19, 8, 0))
@@ -1557,3 +1596,27 @@ class NotificationWorkflowTests(TestCase):
         _, kwargs = send_mock.call_args
         self.assertEqual(kwargs["force"], True)
         self.assertEqual(kwargs["dry_run"], False)
+
+    def test_account_settings_time_change_allows_new_same_day_reminder(self):
+        sent_at = timezone.make_aware(datetime(2026, 5, 20, 11, 5))
+        self.user.notify_time = time(hour=8, minute=0)
+        self.user.last_notification_sent_at = sent_at
+        self.user.save(update_fields=["notify_time", "last_notification_sent_at"])
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("account_settings"),
+            data={
+                "notification_email": "notifier@example.com",
+                "notify_enabled": "on",
+                "notify_time": "12:15",
+                "auto_fetch_portals": "on",
+                "deadline_notification_window_days": "7",
+                "chat_history_retention_days": "1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.notify_time, time(hour=12, minute=15))
+        self.assertIsNone(self.user.last_notification_sent_at)

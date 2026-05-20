@@ -217,6 +217,11 @@ def normalize_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+@lru_cache(maxsize=1)
+def get_local_generation_pipeline():
+    return None
+
+
 def contains_any_term(text: str, terms: tuple[str, ...]) -> bool:
     lowered = text.lower()
     return any(term in lowered for term in terms)

@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.urls import reverse
 
 from .models import DynamicColumn, DynamicTable, PortalJobSuggestion
 
@@ -83,3 +84,33 @@ class PortalJobSuggestionSerializer(serializers.ModelSerializer):
             "added_to_apply",
             "fetched_at",
         )
+
+
+def serialize_dashboard_widget(widget) -> dict[str, object]:
+    return {
+        "row_key": str(widget.row_key),
+        "layout_item_id": widget.layout_item_id,
+        "title": widget.title,
+        "template_key": widget.template_key,
+        "chart_type": widget.chart_type,
+        "accent": widget.accent,
+        "notes": widget.notes,
+        "metric_label": widget.metric_label,
+        "source_table": widget.source_table,
+        "group_by_column": widget.group_by_column,
+        "metric_column": widget.metric_column,
+        "aggregation": widget.aggregation,
+        "filters": widget.filters,
+        "labels": widget.labels,
+        "values": widget.values,
+        "chart_config": widget.chart_config,
+        "kpi_value": widget.kpi_value,
+        "table_columns": widget.table_columns,
+        "show_on_dashboard": widget.show_on_dashboard,
+        "sort_order": widget.sort_order,
+        "card_size": widget.card_size,
+        "chart_height": widget.chart_height,
+        "grid_span": widget.grid_span,
+        "chart_height_px": widget.chart_height_px,
+        "edit_url": reverse("workspace_record_edit", args=["dashboard", widget.row_key]),
+    }

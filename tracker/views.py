@@ -7,6 +7,7 @@ from tempfile import NamedTemporaryFile
 
 from django.conf import settings
 from django.contrib import messages
+from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import LoginView
@@ -78,6 +79,7 @@ from .services import (
     sort_records_with_field,
 )
 from .notifications import build_email_body, send_notification_to_user, upcoming_deadlines_for_user
+from .serializers import serialize_dashboard_widget
 from .smtp_handler import SMTPHandler
 
 
@@ -86,36 +88,6 @@ class WorkspaceReadyMixin:
         workbook = Path(settings.BASE_DIR) / "Applications.xlsx"
         ensure_user_workspace(request.user, workbook if workbook.exists() else None)
         return super().dispatch(request, *args, **kwargs)
-
-
-def serialize_dashboard_widget(widget) -> dict[str, object]:
-    return {
-        "row_key": str(widget.row_key),
-        "layout_item_id": widget.layout_item_id,
-        "title": widget.title,
-        "template_key": widget.template_key,
-        "chart_type": widget.chart_type,
-        "accent": widget.accent,
-        "notes": widget.notes,
-        "metric_label": widget.metric_label,
-        "source_table": widget.source_table,
-        "group_by_column": widget.group_by_column,
-        "metric_column": widget.metric_column,
-        "aggregation": widget.aggregation,
-        "filters": widget.filters,
-        "labels": widget.labels,
-        "values": widget.values,
-        "chart_config": widget.chart_config,
-        "kpi_value": widget.kpi_value,
-        "table_columns": widget.table_columns,
-        "show_on_dashboard": widget.show_on_dashboard,
-        "sort_order": widget.sort_order,
-        "card_size": widget.card_size,
-        "chart_height": widget.chart_height,
-        "grid_span": widget.grid_span,
-        "chart_height_px": widget.chart_height_px,
-        "edit_url": reverse("workspace_record_edit", args=["dashboard", widget.row_key]),
-    }
 
 
 class AuthLoginView(LoginView):
@@ -1271,7 +1243,7 @@ class AccountSettingsView(LoginRequiredMixin, WorkspaceReadyMixin, FormView):
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()
-        kwargs["instance"] = self.request.user
+        kwargs["instance"] = get_user_model().objects.get(pk=self.request.user.pk)
         return kwargs
 
     def get_context_data(self, **kwargs):
@@ -1321,8 +1293,16 @@ class AccountSettingsView(LoginRequiredMixin, WorkspaceReadyMixin, FormView):
 
     def form_valid(self, form):
         user = form.save(commit=False)
+        previous_notify_time = (
+            type(user)
+            .objects.filter(pk=user.pk)
+            .values_list("notify_time", flat=True)
+            .first()
+        )
         if not user.notification_email:
             user.notification_email = user.email
+        if user.notify_time != previous_notify_time:
+            user.last_notification_sent_at = None
         user.save()
         messages.success(self.request, "Notification settings updated.")
         return redirect(self.get_success_url())

@@ -22,7 +22,9 @@ def notification_scheduler_poll_seconds() -> int:
 def _notifications_loop() -> None:
     while True:
         try:
-            if notification_due_users():
+            due_users = notification_due_users()
+            if due_users:
+                logger.info(f"Scheduled notification check found {len(due_users)} due user(s).")
                 run_notifications(force=False, dry_run=False)
         except Exception as exc:
             logger.exception(f"Scheduled notification check failed: {exc}")
@@ -32,6 +34,7 @@ def _notifications_loop() -> None:
 def start_notification_scheduler() -> None:
     global _started
     if os.getenv("DISABLE_NOTIFICATION_SCHEDULER", "").lower() in {"1", "true", "yes", "on"}:
+        logger.info("Notification scheduler disabled by DISABLE_NOTIFICATION_SCHEDULER.")
         return
     with _lock:
         if _started:
@@ -39,3 +42,4 @@ def start_notification_scheduler() -> None:
         worker = threading.Thread(target=_notifications_loop, name="job-tracker-notifier", daemon=True)
         worker.start()
         _started = True
+        logger.info(f"Notification scheduler started. Polling every {notification_scheduler_poll_seconds()} seconds.")

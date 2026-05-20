@@ -254,14 +254,21 @@ def run_notifications(*, force: bool = False, dry_run: bool = False) -> int:
                 logger.info("SMTP connection established successfully.")
 
             for user in users:
-                result = send_notification_to_user(
-                    user,
-                    force=force,
-                    dry_run=dry_run,
-                    now=now,
-                    smtp_handler=smtp_handler,
-                    include_portal_refresh=user.auto_fetch_portals and not dry_run,
-                )
+                try:
+                    result = send_notification_to_user(
+                        user,
+                        force=force,
+                        dry_run=dry_run,
+                        now=now,
+                        smtp_handler=smtp_handler,
+                        include_portal_refresh=user.auto_fetch_portals and not dry_run,
+                    )
+                except Exception as exc:
+                    close_handler = getattr(smtp_handler, "close", None)
+                    if close_handler:
+                        close_handler()
+                    logger.error(f"Notification failed for {user.username}: {exc}")
+                    continue
                 if not result.get("sent"):
                     continue
                 processed += 1

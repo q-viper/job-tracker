@@ -97,7 +97,26 @@ echo "[setup] App will run on local port: $PORT"
 
 ensure_cloudflared
 
+APP_LOG="/tmp/job_tracker__app.log"
+TUNNEL_LOG="/tmp/job_tracker__tunnel.log"
+: > "$APP_LOG"
+: > "$TUNNEL_LOG"
+
+stream_log() {
+  local prefix="$1"
+  local log_file="$2"
+  tail -n +1 -F "$log_file" 2>/dev/null | awk -v prefix="$prefix" '{ print "[" prefix "] " $0; fflush(); }'
+}
+
 cleanup() {
+  if [ -n "${APP_LOG_STREAM_PID:-}" ] && kill -0 "$APP_LOG_STREAM_PID" 2>/dev/null; then
+    pkill -P "$APP_LOG_STREAM_PID" 2>/dev/null || true
+    kill "$APP_LOG_STREAM_PID" 2>/dev/null || true
+  fi
+  if [ -n "${TUNNEL_LOG_STREAM_PID:-}" ] && kill -0 "$TUNNEL_LOG_STREAM_PID" 2>/dev/null; then
+    pkill -P "$TUNNEL_LOG_STREAM_PID" 2>/dev/null || true
+    kill "$TUNNEL_LOG_STREAM_PID" 2>/dev/null || true
+  fi
   if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
     kill "$APP_PID" 2>/dev/null || true
   fi
@@ -108,32 +127,36 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "[run] Starting Django server..."
-"$PYTHON_BIN" run.py serve --host "0.0.0.0" --port ${PORT} > /tmp/job_tracker__app.log 2>&1 &
+PYTHONUNBUFFERED=1 "$PYTHON_BIN" -u run.py serve --host "0.0.0.0" --port "${PORT}" > "$APP_LOG" 2>&1 &
 APP_PID=$!
+stream_log "django" "$APP_LOG" &
+APP_LOG_STREAM_PID=$!
 
 sleep 2
 if ! kill -0 "$APP_PID" 2>/dev/null; then
   echo "[error] Django server failed to start. Logs:"
-  cat /tmp/job_tracker__app.log || true
+  cat "$APP_LOG" || true
   exit 1
 fi
 
 echo "[run] Starting Cloudflare tunnel..."
-cloudflared tunnel --url "http://127.0.0.1:${PORT}" > /tmp/job_tracker__tunnel.log 2>&1 &
+cloudflared tunnel --url "http://127.0.0.1:${PORT}" > "$TUNNEL_LOG" 2>&1 &
 TUNNEL_PID=$!
+stream_log "tunnel" "$TUNNEL_LOG" &
+TUNNEL_LOG_STREAM_PID=$!
 
 echo "[info] Waiting for public URL..."
 PUBLIC_URL=""
 for _ in $(seq 1 30); do
-  if grep -Eo 'https://[-a-zA-Z0-9]+\.trycloudflare\.com' /tmp/job_tracker__tunnel.log >/dev/null 2>&1; then
-    PUBLIC_URL="$(grep -Eo 'https://[-a-zA-Z0-9]+\.trycloudflare\.com' /tmp/job_tracker__tunnel.log | head -n1)"
+  if grep -Eo 'https://[-a-zA-Z0-9]+\.trycloudflare\.com' "$TUNNEL_LOG" >/dev/null 2>&1; then
+    PUBLIC_URL="$(grep -Eo 'https://[-a-zA-Z0-9]+\.trycloudflare\.com' "$TUNNEL_LOG" | head -n1)"
     break
   fi
   sleep 1
 done
 
 if [ -z "$PUBLIC_URL" ]; then
-  echo "[warn] Could not detect public URL yet. Check logs: /tmp/job_tracker__tunnel.log"
+  echo "[warn] Could not detect public URL yet. Check logs: $TUNNEL_LOG"
 else
   echo
   echo "[public] ${PUBLIC_URL}"

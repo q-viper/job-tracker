@@ -3862,6 +3862,9 @@ def ensure_named_user(
     if user.is_superuser != is_superuser:
         user.is_superuser = is_superuser
         changed = True
+    if is_staff and is_superuser and user.notify_enabled:
+        user.notify_enabled = False
+        changed = True
     if not user.is_active:
         user.is_active = True
         changed = True
