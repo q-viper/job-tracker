@@ -21,6 +21,8 @@ class User(AbstractUser):
     email_verified_at = models.DateTimeField(null=True, blank=True)
     verification_email_sent_at = models.DateTimeField(null=True, blank=True)
     last_notification_sent_at = models.DateTimeField(null=True, blank=True)
+    last_notification_error = models.TextField(blank=True)
+    last_notification_error_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self) -> str:
         return self.display_name or self.get_full_name() or self.username

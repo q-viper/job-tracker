@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-from contextlib import nullcontext
 from datetime import datetime, time, timedelta
 from time import monotonic
 
@@ -212,16 +211,9 @@ def send_notification_to_user(
 
     if smtp_handler is None:
         with SMTPHandler.from_env() as handler:
-            return send_notification_to_user(
-                user,
-                force=force,
-                dry_run=False,
-                now=now,
-                smtp_handler=handler,
-                include_portal_refresh=include_portal_refresh,
-            )
-
-    smtp_handler.send_email(recipient, subject, body)
+            handler.send_email(recipient, subject, body)
+    else:
+        smtp_handler.send_email(recipient, subject, body)
     user.last_notification_sent_at = timezone.now()
     user.save(update_fields=["last_notification_sent_at"])
     logger.info(f"Notification sent to {user.username} at {recipient}")
@@ -246,35 +238,28 @@ def run_notifications(*, force: bool = False, dry_run: bool = False) -> int:
         logger.info("SMTP is not configured. Skipping email delivery features.")
         return 0
 
-    smtp_context = nullcontext(None) if dry_run else SMTPHandler.from_env()
-
-    try:
-        with smtp_context as smtp_handler:
-            if smtp_handler:
-                logger.info("SMTP connection established successfully.")
-
-            for user in users:
-                try:
-                    result = send_notification_to_user(
-                        user,
-                        force=force,
-                        dry_run=dry_run,
-                        now=now,
-                        smtp_handler=smtp_handler,
-                        include_portal_refresh=user.auto_fetch_portals and not dry_run,
-                    )
-                except Exception as exc:
-                    close_handler = getattr(smtp_handler, "close", None)
-                    if close_handler:
-                        close_handler()
-                    logger.error(f"Notification failed for {user.username}: {exc}")
-                    continue
-                if not result.get("sent"):
-                    continue
-                processed += 1
-    except Exception as exc:
-        logger.error(f"Notifier failed: {exc}")
-        raise
+    for user in users:
+        try:
+            result = send_notification_to_user(
+                user,
+                force=force,
+                dry_run=dry_run,
+                now=now,
+                smtp_handler=None,
+                include_portal_refresh=user.auto_fetch_portals and not dry_run,
+            )
+        except Exception as exc:
+            user.last_notification_error = str(exc)
+            user.last_notification_error_at = timezone.now()
+            user.save(update_fields=["last_notification_error", "last_notification_error_at"])
+            logger.error(f"Notification failed for {user.username}: {exc}")
+            continue
+        if not result.get("sent"):
+            continue
+        user.last_notification_error = ""
+        user.last_notification_error_at = None
+        user.save(update_fields=["last_notification_error", "last_notification_error_at"])
+        processed += 1
 
     logger.info(f"Finished. Users processed: {processed}")
     return processed

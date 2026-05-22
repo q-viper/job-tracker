@@ -1252,6 +1252,8 @@ class AccountSettingsView(LoginRequiredMixin, WorkspaceReadyMixin, FormView):
         context["smtp_configured"] = SMTPHandler.is_configured()
         context["notification_preview"] = kwargs.get("notification_preview", "")
         context["last_notification_sent_at"] = self.request.user.last_notification_sent_at
+        context["last_notification_error"] = self.request.user.last_notification_error
+        context["last_notification_error_at"] = self.request.user.last_notification_error_at
         return context
 
     def get_success_url(self):
@@ -1280,6 +1282,9 @@ class AccountSettingsView(LoginRequiredMixin, WorkspaceReadyMixin, FormView):
                     result = send_notification_to_user(user, force=True, dry_run=False)
                 except Exception as exc:
                     messages.error(request, f"Could not send the notification email right now: {exc}")
+                    return redirect(self.get_success_url())
+                if not result.get("sent"):
+                    messages.error(request, "Notification email was not sent. Please check your notification settings.")
                     return redirect(self.get_success_url())
                 messages.success(
                     request,

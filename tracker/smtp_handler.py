@@ -79,14 +79,26 @@ class SMTPHandler:
     def send_email(self, recipient: str, subject: str, body: str) -> None:
         if not self.from_email:
             raise RuntimeError("SMTP_FROM_EMAIL or SMTP_USERNAME must be configured.")
-        self.connect()
         message = EmailMessage()
         message["Subject"] = subject
         message["From"] = self.from_email
         message["To"] = recipient
         message.set_content(body)
-        assert self.server is not None
-        self.server.send_message(message)
+
+        for attempt in range(2):
+            self.connect()
+            assert self.server is not None
+            try:
+                refused_recipients = self.server.send_message(message)
+                if refused_recipients:
+                    recipients = ", ".join(refused_recipients.keys())
+                    raise RuntimeError(f"SMTP server refused recipient(s): {recipients}")
+                return
+            except smtplib.SMTPServerDisconnected:
+                # Retry once with a fresh connection when the server dropped a stale session.
+                self.close()
+                if attempt == 1:
+                    raise
 
     def __enter__(self) -> SMTPHandler:
         return self.connect()

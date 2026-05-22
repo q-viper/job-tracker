@@ -23,6 +23,11 @@
                 {% else %}
                     <p class="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">No notification email has been sent yet.</p>
                 {% endif %}
+                {% if last_notification_error %}
+                    <p class="mt-3 text-sm leading-6 text-rose-700 dark:text-rose-300">
+                        Last automatic error{% if last_notification_error_at %} ({{ last_notification_error_at|date:"d/m/Y H:i" }}){% endif %}: {{ last_notification_error }}
+                    </p>
+                {% endif %}
             </div>
         </article>
 

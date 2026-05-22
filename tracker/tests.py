@@ -28,7 +28,7 @@ from .models import (
     DynamicTable,
     PortalJobSuggestion,
 )
-from .notifications import notification_due_users, run_notifications
+from .notifications import notification_due_users, run_notifications, send_notification_to_user
 from .rag import chat_with_rag
 from .services import (
     aggregate_records,
@@ -1498,6 +1498,9 @@ class NotificationWorkflowTests(TestCase):
 
     def test_run_notifications_sends_daily_summary_even_without_new_items(self):
         smtp_context = DummySMTPContext()
+        self.user.last_notification_error = "old smtp error"
+        self.user.last_notification_error_at = timezone.make_aware(datetime(2026, 5, 18, 9, 30))
+        self.user.save(update_fields=["last_notification_error", "last_notification_error_at"])
 
         with (
             patch("tracker.notifications.SMTPHandler.is_configured", return_value=True),
@@ -1515,6 +1518,8 @@ class NotificationWorkflowTests(TestCase):
         self.assertIn("No upcoming deadlines were found", body)
         self.assertIn("No new portal matches were found", body)
         self.assertIsNotNone(self.user.last_notification_sent_at)
+        self.assertEqual(self.user.last_notification_error, "")
+        self.assertIsNone(self.user.last_notification_error_at)
 
     def test_run_notifications_continues_after_one_recipient_fails(self):
         blocked_user = get_user_model().objects.create_user(
@@ -1543,6 +1548,52 @@ class NotificationWorkflowTests(TestCase):
         self.assertEqual(smtp_context.sent_messages[0][0], "notifier@example.com")
         self.assertIsNotNone(self.user.last_notification_sent_at)
         self.assertIsNone(blocked_user.last_notification_sent_at)
+        self.assertEqual(self.user.last_notification_error, "")
+        self.assertIsNone(self.user.last_notification_error_at)
+        self.assertIn("recipient refused", blocked_user.last_notification_error)
+        self.assertIsNotNone(blocked_user.last_notification_error_at)
+
+    def test_send_notification_to_user_runs_portal_refresh_once_per_send(self):
+        smtp_context = DummySMTPContext()
+        self.user.last_notification_sent_at = None
+        self.user.save(update_fields=["last_notification_sent_at"])
+
+        with (
+            patch("tracker.notifications.SMTPHandler.from_env", return_value=smtp_context),
+            patch("tracker.notifications.refresh_portals_for_user", return_value=[]) as refresh_mock,
+        ):
+            result = send_notification_to_user(
+                self.user,
+                force=True,
+                dry_run=False,
+                smtp_handler=None,
+                include_portal_refresh=True,
+            )
+
+        self.assertTrue(result["sent"])
+        self.assertEqual(refresh_mock.call_count, 1)
+        self.assertEqual(len(smtp_context.sent_messages), 1)
+
+    def test_send_notification_to_user_does_not_clear_automatic_error_state(self):
+        smtp_context = DummySMTPContext()
+        error_at = timezone.make_aware(datetime(2026, 5, 19, 8, 30))
+        self.user.last_notification_error = "scheduled smtp timeout"
+        self.user.last_notification_error_at = error_at
+        self.user.save(update_fields=["last_notification_error", "last_notification_error_at"])
+
+        with patch("tracker.notifications.SMTPHandler.from_env", return_value=smtp_context):
+            result = send_notification_to_user(
+                self.user,
+                force=True,
+                dry_run=False,
+                smtp_handler=None,
+                include_portal_refresh=False,
+            )
+
+        self.user.refresh_from_db()
+        self.assertTrue(result["sent"])
+        self.assertEqual(self.user.last_notification_error, "scheduled smtp timeout")
+        self.assertEqual(self.user.last_notification_error_at, error_at)
 
     def test_notification_due_users_respects_configured_daily_time(self):
         early = timezone.make_aware(datetime(2026, 5, 19, 7, 59))
@@ -1596,6 +1647,18 @@ class NotificationWorkflowTests(TestCase):
         _, kwargs = send_mock.call_args
         self.assertEqual(kwargs["force"], True)
         self.assertEqual(kwargs["dry_run"], False)
+
+    def test_account_settings_shows_last_automatic_notification_error(self):
+        self.user.last_notification_error = "SMTP handshake failed"
+        self.user.last_notification_error_at = timezone.make_aware(datetime(2026, 5, 20, 10, 45))
+        self.user.save(update_fields=["last_notification_error", "last_notification_error_at"])
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("account_settings"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Last automatic error")
+        self.assertContains(response, "SMTP handshake failed")
 
     def test_account_settings_time_change_allows_new_same_day_reminder(self):
         sent_at = timezone.make_aware(datetime(2026, 5, 20, 11, 5))
