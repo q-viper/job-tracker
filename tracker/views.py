@@ -949,6 +949,8 @@ class AppliedCreateView(BaseRecordFormView):
                 parse_tag_names(raw_tags),
             )
         messages.success(self.request, "Applied entry saved.")
+        if source_row_key:
+            return redirect("applied_edit", row_uuid)
         return redirect(self.get_success_url())
 
 
@@ -1081,16 +1083,20 @@ class BaseBulkJobActionView(LoginRequiredMixin, WorkspaceReadyMixin, View):
 
         if action == "move_to_applied" and table.slug == "to-apply":
             applied_table = get_user_table(request.user, "applied")
+            moved_row_keys: list[str] = []
             for row_key in row_keys:
-                move_to_applied(
+                moved_key = move_to_applied(
                     user=request.user,
                     applied_table=applied_table,
                     to_apply_table=table,
                     values={},
                     source_row_key=row_key,
                 )
+                moved_row_keys.append(str(moved_key))
                 processed += 1
             messages.success(request, f"Moved {processed} selected item(s) to Applied.")
+            if len(moved_row_keys) == 1:
+                return redirect("applied_edit", moved_row_keys[0])
             return self.get_redirect_response(request)
 
         if action == "add_tags":
@@ -1415,7 +1421,7 @@ def promote_to_applied(request, row_key):
     redirect_to = (request.POST.get("next") or "").strip()
     if request.method == "POST":
         try:
-            move_to_applied(
+            moved_row_key = move_to_applied(
                 user=request.user,
                 applied_table=get_user_table(request.user, "applied"),
                 to_apply_table=get_user_table(request.user, "to-apply"),
@@ -1423,6 +1429,7 @@ def promote_to_applied(request, row_key):
                 source_row_key=row_key,
             )
             messages.success(request, "Job moved to Applied.")
+            return redirect("applied_edit", moved_row_key)
         except ValueError as exc:
             messages.error(request, str(exc))
 

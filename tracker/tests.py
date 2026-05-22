@@ -361,7 +361,7 @@ class DynamicRecordServiceTests(TestCase):
         self.assertContains(response, "Move to Applied")
         self.assertContains(response, reverse("to_apply_promote", args=[source_row_key]))
 
-    def test_promote_to_applied_view_moves_record_and_redirects_back(self):
+    def test_promote_to_applied_view_moves_record_and_opens_applied_edit(self):
         source_row_key = save_record(
             self.to_apply,
             self.user,
@@ -378,7 +378,7 @@ class DynamicRecordServiceTests(TestCase):
             data={"next": "/to-apply/?view=table"},
         )
 
-        self.assertRedirects(response, "/to-apply/?view=table")
+        self.assertRedirects(response, reverse("applied_edit", args=[source_row_key]))
         self.assertEqual(len(get_records(self.to_apply, self.user)), 0)
         applied_records = get_records(self.applied, self.user)
         self.assertEqual(len(applied_records), 1)
@@ -486,6 +486,31 @@ class DynamicRecordServiceTests(TestCase):
             ApplicationTagAssignment.objects.filter(user=self.user, table_slug="applied").count(),
             4,
         )
+
+    def test_bulk_move_to_applied_with_single_selection_opens_applied_edit(self):
+        row_key = save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Single Role",
+                "url": "https://example.com/single",
+                "type": "Job",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("to_apply_bulk"),
+            data={
+                "bulk_action": "move_to_applied",
+                "selected_row_keys": [str(row_key)],
+                "next": "/to-apply/?view=table",
+            },
+        )
+
+        self.assertRedirects(response, reverse("applied_edit", args=[row_key]))
+        self.assertEqual(len(get_records(self.to_apply, self.user)), 0)
+        self.assertEqual(len(get_records(self.applied, self.user)), 1)
 
     def test_applied_bulk_action_can_remove_tags(self):
         row_key = save_record(
@@ -709,6 +734,55 @@ class DynamicRecordServiceTests(TestCase):
         self.assertContains(to_apply_response, 'name="number-of-positions"')
         self.assertContains(applied_response, "Number of Positions")
         self.assertContains(applied_response, 'name="number-of-positions"')
+
+    def test_applied_form_uses_clear_labels_for_ambiguous_fields(self):
+        DynamicColumn.objects.create(
+            table=self.applied,
+            name="Name",
+            slug="name",
+            data_type=DynamicColumn.DataType.TEXT,
+            position=999,
+        )
+        DynamicColumn.objects.create(
+            table=self.applied,
+            name="Source",
+            slug="source",
+            data_type=DynamicColumn.DataType.TEXT,
+            position=1000,
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("applied_create"))
+
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        self.assertEqual(form.fields["name"].label, "Organization Name")
+        self.assertEqual(form.fields["source"].label, "Application Source")
+        self.assertEqual(form.fields["url"].label, "Job Posting URL")
+        self.assertEqual(form.fields["source_row_key"].label, "Start from a To Apply entry")
+
+    def test_applied_create_from_source_row_opens_applied_edit(self):
+        source_row_key = save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Applied ML Role",
+                "url": "https://example.com/applied-ml-role",
+                "type": "Job",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("applied_create"),
+            data={"source_row_key": str(source_row_key)},
+        )
+
+        self.assertRedirects(response, reverse("applied_edit", args=[source_row_key]))
+        self.assertEqual(len(get_records(self.to_apply, self.user)), 0)
+        applied_records = get_records(self.applied, self.user)
+        self.assertEqual(len(applied_records), 1)
+        self.assertEqual(applied_records[0].row_key, source_row_key)
 
     def test_to_apply_list_supports_tag_filter_and_sort_option(self):
         first_row_key = save_record(

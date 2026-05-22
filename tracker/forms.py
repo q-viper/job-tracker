@@ -19,6 +19,49 @@ APPLICATION_RESULT_ORDER = [
     "Withdrawn",
 ]
 
+FRIENDLY_JOB_FIELD_LABELS = {
+    "to-apply": {
+        "name": "Organization Name",
+        "role-title": "Role / Position Title",
+        "url": "Job Posting URL",
+        "source": "Source / Portal",
+        "type": "Opportunity Type",
+        "deadline": "Application Deadline",
+        "number-of-positions": "Open Positions",
+        "english-test": "English Test Requirement",
+    },
+    "applied": {
+        "name": "Organization Name",
+        "role-title": "Role / Position Title",
+        "date": "Applied On",
+        "url": "Job Posting URL",
+        "source": "Application Source",
+        "type": "Opportunity Type",
+        "deadline": "Posting Deadline",
+        "result": "Outcome",
+        "result-on": "Outcome Date",
+        "application-progress": "Current Stage",
+        "number-of-positions": "Open Positions",
+        "ai-reliance": "AI Assistance Level",
+        "completed-stages": "Completed Stages Notes",
+        "remarks": "Notes",
+        "cover-letter-text": "Cover Letter Draft",
+        "cv-text": "CV / Resume Draft",
+    },
+}
+
+FRIENDLY_JOB_FIELD_HELP_TEXTS = {
+    "to-apply": {
+        "name": "Company, university, or organization offering this opportunity.",
+        "source": "Where you found this opening (for example LinkedIn, company careers page, or referral).",
+    },
+    "applied": {
+        "name": "Company, university, or organization you applied to.",
+        "source": "Where this application came from (for example LinkedIn, referral, or careers page).",
+        "remarks": "Use this for interview notes, follow-up reminders, or context you do not want to lose.",
+    },
+}
+
 
 def apply_widget_classes(field: forms.Field) -> None:
     if isinstance(field.widget, forms.CheckboxInput):
@@ -351,6 +394,7 @@ class DynamicRecordForm(forms.Form):
 class JobRecordForm(DynamicRecordForm):
     def __init__(self, *args, table: DynamicTable, user=None, row_key=None, **kwargs):
         super().__init__(*args, table=table, user=user, row_key=row_key, **kwargs)
+        self._apply_friendly_labels_and_help()
         self.available_tags: list[str] = []
         if table.slug in {"to-apply", "applied"}:
             self._configure_job_state_fields()
@@ -374,6 +418,15 @@ class JobRecordForm(DynamicRecordForm):
         )
         if self.fields["tags"].initial:
             self.initial["tags"] = self.fields["tags"].initial
+
+    def _apply_friendly_labels_and_help(self) -> None:
+        table_labels = FRIENDLY_JOB_FIELD_LABELS.get(self.table.slug, {})
+        table_help_texts = FRIENDLY_JOB_FIELD_HELP_TEXTS.get(self.table.slug, {})
+        for slug, field in self.fields.items():
+            if slug in table_labels:
+                field.label = table_labels[slug]
+            if slug in table_help_texts:
+                field.help_text = table_help_texts[slug]
 
     @staticmethod
     def _ordered_choices(choices: list[tuple[str, str]], preferred_order: list[str]) -> list[tuple[str, str]]:
@@ -417,7 +470,7 @@ class ToApplyForm(JobRecordForm):
 class AppliedCreateForm(JobRecordForm):
     source_row_key = forms.ChoiceField(
         required=False,
-        label="Import from To Apply",
+        label="Start from a To Apply entry",
         choices=[("", "Enter a brand-new application")],
     )
 
@@ -431,6 +484,9 @@ class AppliedCreateForm(JobRecordForm):
             label = f"{record.label} ({role_type})" if role_type else record.label
             choices.append((str(record.row_key), label))
         self.fields["source_row_key"].choices = choices
+        self.fields["source_row_key"].help_text = (
+            "Pick an existing To Apply item to prefill this form and move it into Applied."
+        )
         apply_widget_classes(self.fields["source_row_key"])
 
 
