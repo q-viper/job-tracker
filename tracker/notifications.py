@@ -195,6 +195,7 @@ def send_notification_to_user(
     portal_discoveries = refresh_portals_for_user(user) if include_portal_refresh else []
     subject = f"Job Tracker Update for {now.date().isoformat()}"
     body = build_email_body(user, deadlines, portal_discoveries)
+    message_id: str | None = None
 
     if dry_run:
         logger.info(f"Dry run for {user.username} -> {recipient}")
@@ -211,16 +212,22 @@ def send_notification_to_user(
 
     if smtp_handler is None:
         with SMTPHandler.from_env() as handler:
-            handler.send_email(recipient, subject, body)
+            message_id = handler.send_email(recipient, subject, body)
     else:
-        smtp_handler.send_email(recipient, subject, body)
+        message_id = smtp_handler.send_email(recipient, subject, body)
     user.last_notification_sent_at = timezone.now()
     user.save(update_fields=["last_notification_sent_at"])
-    logger.info(f"Notification sent to {user.username} at {recipient}")
+    if message_id:
+        logger.info(
+            f"Notification accepted by SMTP relay for {user.username} at {recipient} (Message-ID: {message_id})"
+        )
+    else:
+        logger.info(f"Notification accepted by SMTP relay for {user.username} at {recipient}")
     return {
         "sent": True,
-        "reason": "sent",
+        "reason": "accepted_by_smtp",
         "recipient": recipient,
+        "message_id": message_id,
         "subject": subject,
         "body": body,
         "deadlines": deadlines,

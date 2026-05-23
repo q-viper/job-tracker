@@ -1292,9 +1292,16 @@ class AccountSettingsView(LoginRequiredMixin, WorkspaceReadyMixin, FormView):
                 if not result.get("sent"):
                     messages.error(request, "Notification email was not sent. Please check your notification settings.")
                     return redirect(self.get_success_url())
+                message_id = (result.get("message_id") or "").strip()
+                if message_id:
+                    messages.success(
+                        request,
+                        f"Notification email accepted by SMTP for {result['recipient']} (Message-ID: {message_id}).",
+                    )
+                    return redirect(self.get_success_url())
                 messages.success(
                     request,
-                    f"Notification email sent to {result['recipient']}.",
+                    f"Notification email accepted by SMTP for {result['recipient']}.",
                 )
                 return redirect(self.get_success_url())
             return self.render_to_response(self.get_context_data(form=form))

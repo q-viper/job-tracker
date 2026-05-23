@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import smtplib
 from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
 
 
 def _bool_from_env(name: str, default: bool) -> bool:
@@ -76,14 +77,23 @@ class SMTPHandler:
         finally:
             self.server = None
 
-    def send_email(self, recipient: str, subject: str, body: str) -> None:
+    def send_email(self, recipient: str, subject: str, body: str) -> str | None:
         if not self.from_email:
             raise RuntimeError("SMTP_FROM_EMAIL or SMTP_USERNAME must be configured.")
+
+        from_domain = ""
+        if "@" in self.from_email:
+            from_domain = self.from_email.rsplit("@", 1)[-1].strip()
+
         message = EmailMessage()
         message["Subject"] = subject
         message["From"] = self.from_email
         message["To"] = recipient
+        message["Date"] = formatdate(localtime=True)
+        message["Message-ID"] = make_msgid(domain=from_domain or None)
+        message["Auto-Submitted"] = "auto-generated"
         message.set_content(body)
+        message_id = str(message.get("Message-ID", "")).strip() or None
 
         for attempt in range(2):
             self.connect()
@@ -93,12 +103,13 @@ class SMTPHandler:
                 if refused_recipients:
                     recipients = ", ".join(refused_recipients.keys())
                     raise RuntimeError(f"SMTP server refused recipient(s): {recipients}")
-                return
+                return message_id
             except smtplib.SMTPServerDisconnected:
                 # Retry once with a fresh connection when the server dropped a stale session.
                 self.close()
                 if attempt == 1:
                     raise
+        return message_id
 
     def __enter__(self) -> SMTPHandler:
         return self.connect()
