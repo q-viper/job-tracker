@@ -372,6 +372,14 @@ EXTRA_COLUMNS = {
             "placeholder": "1",
             "help_text": "Optional. Record how many openings the posting mentions.",
         },
+        {
+            "name": "Country",
+            "slug": "country",
+            "data_type": DynamicColumn.DataType.TEXT,
+            "insert_after": "type",
+            "placeholder": "Germany",
+            "help_text": "Optional. Country where this opportunity is based.",
+        },
     ],
     "applied": [
         {
@@ -395,6 +403,14 @@ EXTRA_COLUMNS = {
             "insert_after": "type",
             "placeholder": "1",
             "help_text": "Optional. Record how many openings the posting mentions.",
+        },
+        {
+            "name": "Country",
+            "slug": "country",
+            "data_type": DynamicColumn.DataType.TEXT,
+            "insert_after": "type",
+            "placeholder": "Germany",
+            "help_text": "Optional. Country where this application opportunity is based.",
         },
         {
             "name": "Application Progress",
@@ -565,6 +581,23 @@ DASHBOARD_WIDGET_TEMPLATES = {
         "card-size": "Standard",
         "chart-height": "Short",
     },
+    "applied-countries": {
+        "title": "Applications by Country",
+        "chart-type": "Horizontal Bar",
+        "source-table": "applied",
+        "group-by-column": "country",
+        "metric-column": "",
+        "aggregation": "Count Records",
+        "filters": "",
+        "limit": "12",
+        "metric": "Applications",
+        "notes": "Where your applications are located based on the Country field.",
+        "accent": "Sky",
+        "show-on-dashboard": "Show",
+        "sort-order": "70",
+        "card-size": "Full",
+        "chart-height": "Tall",
+    },
 }
 
 DEFAULT_DASHBOARD_TEMPLATE_KEYS = (
@@ -574,6 +607,7 @@ DEFAULT_DASHBOARD_TEMPLATE_KEYS = (
     "applied-active-pipeline",
     "applied-stage-timing",
     "applied-deadline-lead",
+    "applied-countries",
 )
 
 DASHBOARD_PANEL_LIBRARY = (

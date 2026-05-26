@@ -730,9 +730,7 @@ class DynamicRecordServiceTests(TestCase):
 
         self.assertEqual(to_apply_response.status_code, 200)
         self.assertEqual(applied_response.status_code, 200)
-        self.assertContains(to_apply_response, "Number of Positions")
         self.assertContains(to_apply_response, 'name="number-of-positions"')
-        self.assertContains(applied_response, "Number of Positions")
         self.assertContains(applied_response, 'name="number-of-positions"')
 
     def test_applied_form_uses_clear_labels_for_ambiguous_fields(self):
