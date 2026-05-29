@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from io import BytesIO
+import logging
 import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from time import monotonic
 
 from django.conf import settings
 from django.contrib import messages
@@ -11,7 +13,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import LoginView
-from django.http import Http404, HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -81,6 +83,8 @@ from .services import (
 from .notifications import build_email_body, send_notification_to_user, upcoming_deadlines_for_user
 from .serializers import serialize_dashboard_widget
 from .smtp_handler import SMTPHandler
+
+logger = logging.getLogger(__name__)
 
 
 class WorkspaceReadyMixin:
@@ -535,7 +539,7 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
                     "promote_url": promote_url,
                     "detail_url": self.get_detail_url(table, record),
                     "tags": tags_map.get(record.row_key, []),
-                    "jobs_url": reverse("portal_jobs", args=[record.row_key]) if table.slug == "portals" else "",
+                    "jobs_url": reverse("portal_fetch_live", args=[record.row_key]) if table.slug == "portals" else "",
                     "primary_cells": primary_cells,
                     "secondary_cells": secondary_cells,
                 }
@@ -722,10 +726,8 @@ class PortalsListView(BaseTableListView):
             },
             {
                 "label": "Fetch all portals",
-                "url": reverse("fetch_all_portal_jobs"),
-                "method": "post",
+                "url": reverse("all_portal_fetch_live"),
                 "classes": "rounded-full bg-sky-100 px-4 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-200 dark:bg-sky-500/20 dark:text-sky-200 dark:hover:bg-sky-500/30",
-                "confirm_message": "Fetch jobs from all saved portals now?",
             },
         ]
 
@@ -1353,6 +1355,102 @@ class PortalJobsView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
         return context
 
 
+class PortalFetchLiveView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
+    template_name = "tracker/portal_fetch_live.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        portal_table = get_user_table(self.request.user, "portals")
+        portal_record = get_record(portal_table, self.request.user, self.kwargs["row_key"])
+        if not portal_record:
+            raise Http404("Portal entry not found.")
+        jobs = PortalJobSuggestion.objects.filter(
+            user=self.request.user,
+            portal_table=portal_table,
+            portal_row_key=self.kwargs["row_key"],
+        ).order_by("title")
+        context.update(
+            {
+                "nav_section": "portals",
+                "portal_record": portal_record,
+                "jobs": jobs,
+                "current_keywords": portal_record.values.get("fetch-keywords") or default_portal_keywords_text(),
+                "all_portal_jobs_url": reverse("all_portal_jobs"),
+                "portal_jobs_url": reverse("portal_jobs", args=[portal_record.row_key]),
+                "portals_url": reverse("portals_list"),
+                "portal_fetch_stream_url": reverse("api_portal_fetch_stream", args=[portal_record.row_key]),
+            }
+        )
+        return context
+
+
+class PortalFetchStreamView(LoginRequiredMixin, WorkspaceReadyMixin, View):
+    def get(self, request, row_key):
+        portal_table = get_user_table(request.user, "portals")
+        portal_record = get_record(portal_table, request.user, row_key)
+        if not portal_record:
+            raise Http404("Portal entry not found.")
+
+        raw_keywords = (request.GET.get("keywords") or "").strip() or None
+        portal_label = portal_record.label
+        portal_url = (portal_record.values.get("url") or "").strip()
+
+        def event(name: str, payload: dict[str, object]) -> str:
+            return f"event: {name}\ndata: {json.dumps(payload)}\n\n"
+
+        def stream():
+            started_at = monotonic()
+            logger.info("Portal fetch started for user=%s portal=%s row_key=%s", request.user.username, portal_label, row_key)
+            yield event("status", {"message": f"Starting fetch for {portal_label}..."})
+            try:
+                if portal_url:
+                    yield event("status", {"message": f"Fetching from {portal_url}..."})
+                jobs = refresh_portal_jobs(
+                    request.user,
+                    portal_table,
+                    row_key,
+                    raw_keywords=raw_keywords,
+                )
+                yield event("status", {"message": f"Saved {len(jobs)} job(s). Streaming results..."})
+                for job in jobs:
+                    yield event(
+                        "job",
+                        {
+                            "id": job.id,
+                            "title": job.title,
+                            "url": job.url,
+                            "summary": job.summary,
+                            "added_to_apply": job.added_to_apply,
+                        },
+                    )
+                duration = monotonic() - started_at
+                logger.info(
+                    "Portal fetch finished for user=%s portal=%s row_key=%s jobs=%s duration_s=%.2f",
+                    request.user.username,
+                    portal_label,
+                    row_key,
+                    len(jobs),
+                    duration,
+                )
+                yield event("done", {"message": f"Done. Found {len(jobs)} job(s).", "count": len(jobs), "duration_s": round(duration, 2)})
+            except Exception as exc:
+                duration = monotonic() - started_at
+                logger.exception(
+                    "Portal fetch failed for user=%s portal=%s row_key=%s duration_s=%.2f: %s",
+                    request.user.username,
+                    portal_label,
+                    row_key,
+                    duration,
+                    exc,
+                )
+                yield event("fetch_error", {"message": str(exc)})
+
+        response = StreamingHttpResponse(stream(), content_type="text/event-stream")
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"
+        return response
+
+
 class AllPortalJobsView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
     template_name = "tracker/all_portal_jobs.html"
 
@@ -1372,6 +1470,100 @@ class AllPortalJobsView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
             }
         )
         return context
+
+
+class AllPortalFetchLiveView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
+    template_name = "tracker/all_portal_fetch_live.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        portal_table = get_user_table(self.request.user, "portals")
+        portal_records = get_records(portal_table, self.request.user)
+        jobs = PortalJobSuggestion.objects.filter(user=self.request.user).order_by("-fetched_at", "portal_name", "title")
+        context.update(
+            {
+                "nav_section": "portals",
+                "jobs": jobs,
+                "job_count": jobs.count(),
+                "portal_count": len(portal_records),
+                "portals_url": reverse("portals_list"),
+                "all_portal_jobs_url": reverse("all_portal_jobs"),
+                "portal_fetch_all_stream_url": reverse("api_portal_fetch_all_stream"),
+            }
+        )
+        return context
+
+
+class AllPortalFetchStreamView(LoginRequiredMixin, WorkspaceReadyMixin, View):
+    def get(self, request):
+        portal_table = get_user_table(request.user, "portals")
+        portal_records = get_records(portal_table, request.user)
+        username = getattr(request.user, "username", "unknown")
+
+        def event(name: str, payload: dict[str, object]) -> str:
+            return f"event: {name}\ndata: {json.dumps(payload)}\n\n"
+
+        def stream():
+            started_at = monotonic()
+            logger.info("Portal sweep started user=%s portals=%s", username, len(portal_records))
+            yield event("status", {"message": f"Starting sweep across {len(portal_records)} portal(s)..."})
+            processed = 0
+            total_jobs = 0
+            for index, portal_record in enumerate(portal_records, start=1):
+                portal_label = portal_record.label
+                yield event("status", {"message": f"[{index}/{len(portal_records)}] Fetching {portal_label}..."})
+                try:
+                    jobs = refresh_portal_jobs(
+                        request.user,
+                        portal_table,
+                        portal_record.row_key,
+                        raw_keywords=portal_record.values.get("fetch-keywords"),
+                    )
+                except Exception as exc:
+                    logger.warning("Portal sweep portal failed user=%s portal=%s row_key=%s: %s", username, portal_label, portal_record.row_key, exc)
+                    yield event("portal_error", {"portal": portal_label, "message": str(exc)})
+                    continue
+                processed += 1
+                total_jobs += len(jobs)
+                yield event("portal_done", {"portal": portal_label, "jobs": len(jobs)})
+                for job in jobs:
+                    yield event(
+                        "job",
+                        {
+                            "id": job.id,
+                            "portal_name": job.portal_name,
+                            "portal_url": job.portal_url,
+                            "portal_row_key": str(job.portal_row_key),
+                            "title": job.title,
+                            "url": job.url,
+                            "summary": job.summary,
+                            "fetched_at": job.fetched_at.isoformat(),
+                            "added_to_apply": job.added_to_apply,
+                        },
+                    )
+
+            duration = monotonic() - started_at
+            logger.info(
+                "Portal sweep finished user=%s refreshed=%s jobs=%s duration_s=%.2f",
+                username,
+                processed,
+                total_jobs,
+                duration,
+            )
+            yield event(
+                "done",
+                {
+                    "message": f"Done. Refreshed {processed} portal(s) and saved {total_jobs} job(s).",
+                    "refreshed": processed,
+                    "jobs": total_jobs,
+                    "duration_s": round(duration, 2),
+                },
+            )
+
+        response = StreamingHttpResponse(stream(), content_type="text/event-stream")
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"
+        return response
 
 
 class FetchPortalJobsView(LoginRequiredMixin, WorkspaceReadyMixin, View):

@@ -13,11 +13,7 @@
                 </p>
             </div>
             <div class="flex flex-wrap gap-3">
-                <form action="{{ fetch_all_portal_jobs_url }}" method="post" data-confirm-message="Fetch jobs from all saved portals now?">
-                    {% csrf_token %}
-                    <input type="hidden" name="next" value="{% url 'all_portal_jobs' %}">
-                    <button class="rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400" type="submit">Fetch all portals</button>
-                </form>
+                <a href="{% url 'all_portal_fetch_live' %}" class="rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400">Fetch all portals</a>
                 <a href="{{ portals_url }}" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Back to portals</a>
             </div>
         </div>

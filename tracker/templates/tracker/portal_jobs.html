@@ -20,15 +20,11 @@
                 <p id="portal-live-status" class="mt-2 text-sm font-medium text-slate-600" aria-live="polite"></p>
             </div>
             <div class="flex flex-wrap gap-3">
-                <button class="rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800" type="submit">Fetch latest jobs</button>
-                <button form="fetch-all-portals-form" class="rounded-full bg-sky-100 px-4 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-200" type="submit">Fetch all portals</button>
+                <a href="{% url 'portal_fetch_live' portal_record.row_key %}" class="rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800">Fetch latest jobs</a>
+                <a href="{% url 'all_portal_fetch_live' %}" class="rounded-full bg-sky-100 px-4 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-200">Fetch all portals</a>
                 <a href="{{ all_portal_jobs_url }}" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50">All fetched jobs</a>
                 <a href="{% url 'portals_list' %}" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50">Back to portals</a>
             </div>
-        </form>
-        <form id="fetch-all-portals-form" action="{{ fetch_all_portal_jobs_url }}" method="post" class="hidden" data-confirm-message="Fetch jobs from all saved portals now?">
-            {% csrf_token %}
-            <input type="hidden" name="next" value="{{ all_portal_jobs_url }}">
         </form>
     </section>
 
@@ -149,46 +145,8 @@
                 status.textContent = cards.length ? `${visible} of ${cards.length} fetched jobs visible` : "";
             }
 
-            function renderJob(job) {
-                const addUrl = results.dataset.addUrlTemplate.replace("/0/", `/${job.id}/`);
-                const action = job.added_to_apply
-                    ? '<span class="rounded-full bg-emerald-100 px-4 py-2 text-sm font-medium text-emerald-700 ring-1 ring-emerald-200">Already in To Apply</span>'
-                    : `<form action="${addUrl}" method="post"><input type="hidden" name="csrfmiddlewaretoken" value="${escapeHtml(form.querySelector("[name=csrfmiddlewaretoken]").value)}"><button class="rounded-full bg-sky-100 px-4 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-200" type="submit">Add to To Apply</button></form>`;
-                const summary = job.summary ? `<p class="mt-4 text-sm leading-6 text-slate-600">${escapeHtml(job.summary)}</p>` : "";
-                const searchText = escapeHtml(`${job.title || ""} ${job.summary || ""} ${job.url || ""}`);
-                return `<article class="portal-job-card rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-sm backdrop-blur" data-search-text="${searchText}"><div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between"><div class="flex-1"><a href="${escapeHtml(job.url)}" target="_blank" rel="noreferrer" class="text-lg font-semibold text-sky-700 hover:text-sky-800">${escapeHtml(job.title)}</a><p class="mt-3 break-all text-sm text-slate-500">${escapeHtml(job.url)}</p>${summary}</div><div class="flex flex-wrap gap-3">${action}</div></div></article>`;
-            }
-
             keywordInput.addEventListener("input", filterCards);
             filterCards();
-
-            form.addEventListener("submit", async (event) => {
-                event.preventDefault();
-                const button = form.querySelector('button[type="submit"]');
-                button.disabled = true;
-                status.textContent = "Fetching matching jobs...";
-                try {
-                    const response = await fetch(form.dataset.fetchUrl, {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "X-CSRFToken": form.querySelector("[name=csrfmiddlewaretoken]").value,
-                        },
-                        body: JSON.stringify({ keywords: keywordInput.value }),
-                    });
-                    if (!response.ok) {
-                        throw new Error("Fetch failed");
-                    }
-                    const jobs = await response.json();
-                    results.querySelectorAll(".portal-job-card").forEach((card) => card.remove());
-                    results.insertAdjacentHTML("afterbegin", jobs.map(renderJob).join(""));
-                    filterCards();
-                } catch (error) {
-                    status.textContent = "Could not fetch jobs in realtime. The page form is still available after reload.";
-                } finally {
-                    button.disabled = false;
-                }
-            });
         })();
     </script>
 {% endblock %}

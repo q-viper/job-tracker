@@ -1224,6 +1224,100 @@ class DynamicRecordServiceTests(TestCase):
         self.assertContains(response, "Computer Vision Scientist")
         self.assertContains(response, "Example Research Portal")
 
+    def test_portals_list_fetch_jobs_link_opens_live_fetch_page(self):
+        row_key = save_record(
+            self.portals,
+            self.user,
+            {
+                "url": "https://example.com/portal",
+                "name": "Example Portal",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("portals_list"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, reverse("portal_fetch_live", args=[row_key]))
+
+    def test_portal_fetch_live_page_renders_and_includes_stream_url(self):
+        row_key = save_record(
+            self.portals,
+            self.user,
+            {
+                "url": "https://example.com/portal",
+                "name": "Example Portal",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("portal_fetch_live", args=[row_key]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Live Portal Fetch")
+        self.assertContains(response, reverse("api_portal_fetch_stream", args=[row_key]))
+
+    def test_portal_fetch_stream_emits_job_and_done_events(self):
+        row_key = save_record(
+            self.portals,
+            self.user,
+            {
+                "url": "https://example.com/portal",
+                "name": "Example Portal",
+            },
+        )
+        job = PortalJobSuggestion.objects.create(
+            user=self.user,
+            portal_table=self.portals,
+            portal_row_key=row_key,
+            portal_name="Example Portal",
+            portal_url="https://example.com/portal",
+            title="Computer Vision Scientist",
+            url="https://example.com/portal/cv-scientist",
+            summary="Research role focused on vision and machine learning.",
+        )
+        self.client.force_login(self.user)
+
+        with patch("tracker.views.refresh_portal_jobs", return_value=[job]):
+            response = self.client.get(reverse("api_portal_fetch_stream", args=[row_key]))
+            body = b"".join(response.streaming_content).decode("utf-8", errors="ignore")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/event-stream")
+        self.assertIn("event: job", body)
+        self.assertIn("Computer Vision Scientist", body)
+        self.assertIn("event: done", body)
+
+    def test_portal_sweep_stream_emits_portal_done_and_done_events(self):
+        row_key = save_record(
+            self.portals,
+            self.user,
+            {
+                "url": "https://example.com/portal",
+                "name": "Example Portal",
+            },
+        )
+        job = PortalJobSuggestion.objects.create(
+            user=self.user,
+            portal_table=self.portals,
+            portal_row_key=row_key,
+            portal_name="Example Portal",
+            portal_url="https://example.com/portal",
+            title="Computer Vision Scientist",
+            url="https://example.com/portal/cv-scientist",
+            summary="Research role focused on vision and machine learning.",
+        )
+        self.client.force_login(self.user)
+
+        with patch("tracker.views.refresh_portal_jobs", return_value=[job]):
+            response = self.client.get(reverse("api_portal_fetch_all_stream"))
+            body = b"".join(response.streaming_content).decode("utf-8", errors="ignore")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/event-stream")
+        self.assertIn("event: portal_done", body)
+        self.assertIn("event: done", body)
+
     def test_scrape_jobs_from_portal_falls_back_to_selenium_after_403(self):
         blocked_error = requests.HTTPError("403 Client Error: Forbidden for url")
         blocked_error.response = SimpleNamespace(status_code=403)

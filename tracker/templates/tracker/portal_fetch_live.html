@@ -1,0 +1,208 @@
+{% extends "tracker/base.html" %}
+
+{% block title %}Live Portal Fetch | Job Tracker{% endblock %}
+
+{% block content %}
+    <section class="rounded-[2rem] border border-white/70 bg-white/85 p-6 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div class="min-w-0">
+                <p class="font-mono text-xs uppercase tracking-[0.25em] text-sky-600 dark:text-sky-300">Live Portal Fetch</p>
+                <h2 class="mt-2 truncate text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100">{{ portal_record.label }}</h2>
+                <p class="mt-3 break-all text-sm text-slate-600 dark:text-slate-300">{{ portal_record.values.url }}</p>
+            </div>
+            <div class="flex flex-wrap gap-3">
+                <a href="{{ portal_jobs_url }}" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Open portal jobs</a>
+                <a href="{{ all_portal_jobs_url }}" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">All fetched jobs</a>
+                <a href="{{ portals_url }}" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-700">Back to portals</a>
+            </div>
+        </div>
+
+        <div class="mt-6 grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
+            <div>
+                <label class="text-sm font-semibold text-slate-800 dark:text-slate-100" for="id_keywords">Filter keywords</label>
+                <textarea id="id_keywords" name="keywords" rows="4" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white/85 px-4 py-3 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">{{ current_keywords }}</textarea>
+                <p class="mt-2 text-sm text-slate-500 dark:text-slate-300/80">Fetch starts automatically and streams updates as jobs are saved.</p>
+                <p id="portal-live-status" class="mt-2 text-sm font-medium text-slate-700 dark:text-slate-200" aria-live="polite"></p>
+                <ul id="portal-live-log" class="mt-3 space-y-1 text-sm text-slate-600 dark:text-slate-300"></ul>
+            </div>
+            <div class="flex flex-wrap gap-3">
+                <form id="portal-csrf-form" class="hidden">{% csrf_token %}</form>
+                <button id="portal-refetch" type="button" class="rounded-full bg-slate-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400">Fetch now</button>
+            </div>
+        </div>
+    </section>
+
+    <section id="portal-job-results" class="mt-8 space-y-4" data-add-url-template="{% url 'add_portal_job_to_apply' 0 %}" data-empty-message="No fetched jobs match these keywords yet.">
+        {% for job in jobs %}
+            <article class="portal-job-card rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85" data-search-text="{{ job.title }} {{ job.summary }} {{ job.url }}">
+                <div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                    <div class="flex-1">
+                        <a href="{{ job.url }}" target="_blank" rel="noreferrer" class="text-lg font-semibold text-sky-700 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200">{{ job.title }}</a>
+                        <p class="mt-3 break-all text-sm text-slate-500 dark:text-slate-300/80">{{ job.url }}</p>
+                        {% if job.summary %}
+                            <p class="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-200">{{ job.summary }}</p>
+                        {% endif %}
+                    </div>
+                    <div class="flex flex-wrap gap-3">
+                        {% if job.added_to_apply %}
+                            <span class="rounded-full bg-emerald-100 px-4 py-2 text-sm font-medium text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-200 dark:ring-emerald-500/30">Already in To Apply</span>
+                        {% else %}
+                            <form action="{% url 'add_portal_job_to_apply' job.id %}" method="post">
+                                {% csrf_token %}
+                                <button class="rounded-full bg-sky-100 px-4 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-200 dark:bg-sky-500/20 dark:text-sky-200 dark:hover:bg-sky-500/30" type="submit">Add to To Apply</button>
+                            </form>
+                        {% endif %}
+                    </div>
+                </div>
+            </article>
+        {% empty %}
+        {% endfor %}
+        <article id="portal-empty-state" class="{% if jobs %}hidden {% endif %}rounded-[2rem] border border-dashed border-slate-300 bg-white/70 p-10 text-center text-sm text-slate-600 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/60 dark:text-slate-300">
+            Waiting for portal fetch results...
+        </article>
+    </section>
+
+    <script>
+        (() => {
+            const streamUrl = "{{ portal_fetch_stream_url }}";
+            const results = document.getElementById("portal-job-results");
+            const status = document.getElementById("portal-live-status");
+            const logList = document.getElementById("portal-live-log");
+            const emptyState = document.getElementById("portal-empty-state");
+            const keywordInput = document.getElementById("id_keywords");
+            const refetchButton = document.getElementById("portal-refetch");
+            const csrfField = document.querySelector("#portal-csrf-form input[name=csrfmiddlewaretoken]");
+
+            if (!streamUrl || !results || !status || !logList || !emptyState || !keywordInput || !refetchButton || !csrfField) {
+                return;
+            }
+
+            let source = null;
+
+            function escapeHtml(value) {
+                return String(value || "")
+                    .replaceAll("&", "&amp;")
+                    .replaceAll("<", "&lt;")
+                    .replaceAll(">", "&gt;")
+                    .replaceAll('"', "&quot;")
+                    .replaceAll("'", "&#039;");
+            }
+
+            function addLog(message, level = "info") {
+                const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+                const item = document.createElement("li");
+                const tone = level === "error" ? "text-rose-700 dark:text-rose-300" : "text-slate-600 dark:text-slate-300";
+                item.className = `flex gap-2 ${tone}`;
+                item.innerHTML = `<span class="shrink-0 font-mono text-xs uppercase tracking-[0.22em] text-slate-400 dark:text-slate-400">${escapeHtml(time)}</span><span class="min-w-0 break-words">${escapeHtml(message)}</span>`;
+                logList.prepend(item);
+            }
+
+            function renderJob(job) {
+                const addUrl = results.dataset.addUrlTemplate.replace("/0/", `/${job.id}/`);
+                const action = job.added_to_apply
+                    ? '<span class="rounded-full bg-emerald-100 px-4 py-2 text-sm font-medium text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-200 dark:ring-emerald-500/30">Already in To Apply</span>'
+                    : `<form action="${addUrl}" method="post"><input type="hidden" name="csrfmiddlewaretoken" value="${escapeHtml(csrfField.value)}"><button class="rounded-full bg-sky-100 px-4 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-200 dark:bg-sky-500/20 dark:text-sky-200 dark:hover:bg-sky-500/30" type="submit">Add to To Apply</button></form>`;
+                const summary = job.summary ? `<p class="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-200">${escapeHtml(job.summary)}</p>` : "";
+                const searchText = escapeHtml(`${job.title || ""} ${job.summary || ""} ${job.url || ""}`);
+                return `<article class="portal-job-card rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85" data-search-text="${searchText}"><div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between"><div class="flex-1"><a href="${escapeHtml(job.url)}" target="_blank" rel="noreferrer" class="text-lg font-semibold text-sky-700 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200">${escapeHtml(job.title)}</a><p class="mt-3 break-all text-sm text-slate-500 dark:text-slate-300/80">${escapeHtml(job.url)}</p>${summary}</div><div class="flex flex-wrap gap-3">${action}</div></div></article>`;
+            }
+
+            function clearJobs() {
+                results.querySelectorAll(".portal-job-card").forEach((card) => card.remove());
+                emptyState.classList.remove("hidden");
+                emptyState.textContent = "Fetching jobs...";
+            }
+
+            function startStream() {
+                if (source) {
+                    source.close();
+                }
+                clearJobs();
+                refetchButton.disabled = true;
+                status.textContent = "Connecting to live fetch stream...";
+                addLog("Connecting to fetch stream...");
+                const params = new URLSearchParams();
+                if (keywordInput.value.trim()) {
+                    params.set("keywords", keywordInput.value);
+                }
+                const url = params.toString() ? `${streamUrl}?${params.toString()}` : streamUrl;
+                source = new EventSource(url);
+
+                source.addEventListener("status", (event) => {
+                    try {
+                        const data = JSON.parse(event.data || "{}");
+                        if (data.message) {
+                            status.textContent = data.message;
+                            addLog(String(data.message));
+                        }
+                    } catch (err) {
+                        // ignore parsing errors
+                    }
+                });
+                source.addEventListener("job", (event) => {
+                    try {
+                        const job = JSON.parse(event.data || "{}");
+                        if (!job || !job.id) {
+                            return;
+                        }
+                        emptyState.classList.add("hidden");
+                        results.insertAdjacentHTML("beforeend", renderJob(job));
+                    } catch (err) {
+                        // ignore parsing errors
+                    }
+                });
+                source.addEventListener("fetch_error", (event) => {
+                    try {
+                        const data = JSON.parse(event.data || "{}");
+                        status.textContent = data.message || "Fetch failed.";
+                        addLog(data.message || "Fetch failed.", "error");
+                    } catch (err) {
+                        status.textContent = "Fetch failed.";
+                        addLog("Fetch failed.", "error");
+                    }
+                    refetchButton.disabled = false;
+                    if (source) {
+                        source.close();
+                    }
+                    emptyState.classList.remove("hidden");
+                    emptyState.textContent = "Fetch failed.";
+                });
+                source.addEventListener("done", (event) => {
+                    try {
+                        const data = JSON.parse(event.data || "{}");
+                        status.textContent = data.message || "Fetch complete.";
+                        addLog(data.message || "Fetch complete.");
+                    } catch (err) {
+                        status.textContent = "Fetch complete.";
+                        addLog("Fetch complete.");
+                    }
+                    refetchButton.disabled = false;
+                    if (source) {
+                        source.close();
+                    }
+                    if (!results.querySelector(".portal-job-card")) {
+                        emptyState.classList.remove("hidden");
+                        emptyState.textContent = "No matching jobs were found.";
+                    }
+                });
+                source.addEventListener("error", (event) => {
+                    // Some browsers emit a generic error event for disconnects too; we only surface if we still look busy.
+                    if (!refetchButton.disabled) {
+                        return;
+                    }
+                    status.textContent = "Fetch failed. Check logs and try again.";
+                    addLog("Fetch failed. Check server logs for details.", "error");
+                    refetchButton.disabled = false;
+                    if (source) {
+                        source.close();
+                    }
+                    emptyState.classList.remove("hidden");
+                    emptyState.textContent = "Fetch failed.";
+                });
+            }
+
+            refetchButton.addEventListener("click", () => startStream());
+            startStream();
+        })();
+    </script>
+{% endblock %}

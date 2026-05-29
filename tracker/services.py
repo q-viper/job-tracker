@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 import os
 import re
 import shutil
@@ -11,6 +12,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from time import monotonic
 from typing import Any
 from urllib.parse import urljoin, urlparse
 from uuid import UUID, uuid4
@@ -37,6 +39,8 @@ from .models import (
     DynamicTable,
     PortalJobSuggestion,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_WORKBOOK_HEADERS = {
     "applied": [
@@ -1024,25 +1028,27 @@ def validate_safe_external_url(url: str) -> None:
 
 def safe_get_url(url: str, timeout: int = 15) -> requests.Response:
     validate_safe_external_url(url)
-    import cloudscraper
-    scraper = cloudscraper.create_scraper(
-        browser={
-            'browser': 'chrome',
-            'platform': 'windows',
-            'mobile': False,
-        }
-    )
-    response = scraper.get(
-        url,
-        timeout=timeout,
-        headers={
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache",
-            "Upgrade-Insecure-Requests": "1",
-        },
-    )
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    try:
+        import cloudscraper  # type: ignore
+    except ImportError:
+        logger.warning("cloudscraper is not installed; falling back to requests.get for %s", url)
+        response = requests.get(url, timeout=timeout, headers=headers)
+    else:
+        scraper = cloudscraper.create_scraper(
+            browser={
+                "browser": "chrome",
+                "platform": "windows",
+                "mobile": False,
+            }
+        )
+        response = scraper.get(url, timeout=timeout, headers=headers)
     response.raise_for_status()
     return response
 
@@ -3612,6 +3618,7 @@ def refresh_portal_jobs(
     portal_row_key: UUID | str,
     raw_keywords: str | None = None,
 ) -> list[PortalJobSuggestion]:
+    started_at = monotonic()
     portal_record = get_record(portal_table, user, portal_row_key)
     if not portal_record:
         raise ValueError("Portal entry not found.")
@@ -3629,7 +3636,12 @@ def refresh_portal_jobs(
     )
 
     portal_name = portal_record.values.get("name") or portal_record.label
-    jobs = scrape_jobs_from_portal(portal_url, resolve_portal_keywords(portal_keywords_text))
+    username = getattr(user, "username", "unknown")
+    keywords = resolve_portal_keywords(portal_keywords_text)
+    logger.info("Portal refresh started user=%s portal=%s row_key=%s", username, portal_name, portal_record.row_key)
+    logger.info("Portal refresh configuration user=%s portal=%s keywords=%s", username, portal_name, len(keywords))
+    jobs = scrape_jobs_from_portal(portal_url, keywords)
+    logger.info("Portal refresh scraped user=%s portal=%s jobs=%s", username, portal_name, len(jobs))
 
     with transaction.atomic():
         PortalJobSuggestion.objects.filter(
@@ -3652,6 +3664,13 @@ def refresh_portal_jobs(
         ]
         PortalJobSuggestion.objects.bulk_create(created_items)
 
+    logger.info(
+        "Portal refresh finished user=%s portal=%s jobs=%s duration_s=%.2f",
+        username,
+        portal_name,
+        len(jobs),
+        monotonic() - started_at,
+    )
     return list(
         PortalJobSuggestion.objects.filter(
             user=user,
@@ -3667,6 +3686,8 @@ def refresh_all_portal_jobs_for_user(user) -> dict[str, Any]:
     refreshed = 0
     total_jobs = 0
     errors: list[str] = []
+    started_at = monotonic()
+    username = getattr(user, "username", "unknown")
 
     for portal_record in portal_records:
         try:
@@ -3679,7 +3700,18 @@ def refresh_all_portal_jobs_for_user(user) -> dict[str, Any]:
             refreshed += 1
             total_jobs += len(jobs)
         except Exception as exc:
+            logger.warning("Portal refresh failed user=%s portal=%s row_key=%s: %s", username, portal_record.label, portal_record.row_key, exc)
             errors.append(f"{portal_record.label}: {exc}")
+
+    logger.info(
+        "Portal sweep finished user=%s portals=%s refreshed=%s jobs=%s errors=%s duration_s=%.2f",
+        username,
+        len(portal_records),
+        refreshed,
+        total_jobs,
+        len(errors),
+        monotonic() - started_at,
+    )
 
     return {
         "refreshed": refreshed,
