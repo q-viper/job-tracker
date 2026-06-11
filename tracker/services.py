@@ -517,6 +517,23 @@ DASHBOARD_WIDGET_TEMPLATES = {
         "card-size": "Wide",
         "chart-height": "Medium",
     },
+    "applied-ai-reliance": {
+        "title": "AI Reliance Mix",
+        "chart-type": "Doughnut",
+        "source-table": "applied",
+        "group-by-column": "ai-reliance",
+        "metric-column": "",
+        "aggregation": "Count Records",
+        "filters": "",
+        "limit": "6",
+        "metric": "AI reliance",
+        "notes": "Applications grouped into None, Low, Medium, High, Unspecified, or Other AI reliance categories.",
+        "accent": "Emerald",
+        "show-on-dashboard": "Show",
+        "sort-order": "37",
+        "card-size": "Standard",
+        "chart-height": "Medium",
+    },
     "applied-stage-timing": {
         "title": "Average Days To Each Stage",
         "chart-type": "Horizontal Bar",
@@ -548,6 +565,57 @@ DASHBOARD_WIDGET_TEMPLATES = {
         "accent": "Rose",
         "show-on-dashboard": "Show",
         "sort-order": "50",
+        "card-size": "Wide",
+        "chart-height": "Medium",
+    },
+    "applied-over-time": {
+        "title": "Applications Over Time",
+        "chart-type": "Area",
+        "source-table": "applied",
+        "group-by-column": "date",
+        "metric-column": "",
+        "aggregation": "Count Records",
+        "filters": "",
+        "limit": "30",
+        "metric": "Applications",
+        "notes": "Daily submission volume from the Applied On date.",
+        "accent": "Sky",
+        "show-on-dashboard": "Show",
+        "sort-order": "55",
+        "card-size": "Wide",
+        "chart-height": "Medium",
+    },
+    "applied-outcome-mix": {
+        "title": "Outcome Mix",
+        "chart-type": "Pie",
+        "source-table": "applied",
+        "group-by-column": "result",
+        "metric-column": "",
+        "aggregation": "Count Records",
+        "filters": "",
+        "limit": "8",
+        "metric": "Outcomes",
+        "notes": "Current result values across submitted applications.",
+        "accent": "Amber",
+        "show-on-dashboard": "Show",
+        "sort-order": "60",
+        "card-size": "Standard",
+        "chart-height": "Medium",
+    },
+    "applied-source-mix": {
+        "title": "Applications by Source",
+        "chart-type": "Horizontal Bar",
+        "source-table": "applied",
+        "group-by-column": "source",
+        "metric-column": "",
+        "aggregation": "Count Records",
+        "filters": "",
+        "limit": "12",
+        "metric": "Applications",
+        "notes": "Where submitted applications came from, including referrals, portals, and career pages.",
+        "accent": "Slate",
+        "show-on-dashboard": "Show",
+        "sort-order": "65",
         "card-size": "Wide",
         "chart-height": "Medium",
     },
@@ -585,6 +653,23 @@ DASHBOARD_WIDGET_TEMPLATES = {
         "card-size": "Standard",
         "chart-height": "Short",
     },
+    "to-apply-type-mix": {
+        "title": "To Apply Opportunity Types",
+        "chart-type": "Pie",
+        "source-table": "to-apply",
+        "group-by-column": "type",
+        "metric-column": "",
+        "aggregation": "Count Records",
+        "filters": "",
+        "limit": "8",
+        "metric": "Queued jobs",
+        "notes": "Current To Apply queue split by opportunity type.",
+        "accent": "Rose",
+        "show-on-dashboard": "Show",
+        "sort-order": "68",
+        "card-size": "Standard",
+        "chart-height": "Medium",
+    },
     "applied-countries": {
         "title": "Applications by Country",
         "chart-type": "Horizontal Bar",
@@ -609,8 +694,13 @@ DEFAULT_DASHBOARD_TEMPLATE_KEYS = (
     "applied-flow",
     "applied-progress-pie",
     "applied-active-pipeline",
+    "applied-ai-reliance",
     "applied-stage-timing",
     "applied-deadline-lead",
+    "applied-over-time",
+    "applied-outcome-mix",
+    "applied-source-mix",
+    "to-apply-type-mix",
     "applied-countries",
 )
 
@@ -684,8 +774,10 @@ DEFAULT_DASHBOARD_BOARD_PRESETS = (
         "widgets": (
             {"template_key": "applied-flow", "card_size": "Full", "chart_height": "Tall"},
             {"template_key": "applied-progress-pie", "card_size": "Standard", "chart_height": "Medium"},
+            {"template_key": "applied-ai-reliance", "card_size": "Standard", "chart_height": "Medium"},
             {"template_key": "applied-stage-timing", "card_size": "Wide", "chart_height": "Tall"},
             {"template_key": "applied-deadline-lead", "card_size": "Wide", "chart_height": "Medium"},
+            {"template_key": "applied-over-time", "card_size": "Wide", "chart_height": "Medium"},
         ),
     },
     {
@@ -700,6 +792,8 @@ DEFAULT_DASHBOARD_BOARD_PRESETS = (
             {"template_key": "applied-stage-timing", "card_size": "Wide", "chart_height": "Tall"},
             {"template_key": "applied-job-types", "card_size": "Wide", "chart_height": "Medium"},
             {"template_key": "applied-progress-pie", "card_size": "Standard", "chart_height": "Medium"},
+            {"template_key": "applied-outcome-mix", "card_size": "Standard", "chart_height": "Medium"},
+            {"template_key": "applied-source-mix", "card_size": "Wide", "chart_height": "Medium"},
         ),
     },
     {
@@ -712,10 +806,19 @@ DEFAULT_DASHBOARD_BOARD_PRESETS = (
         "widgets": (
             {"template_key": "applied-deadline-lead", "card_size": "Wide", "chart_height": "Medium"},
             {"template_key": "deadline-count", "card_size": "Wide", "chart_height": "Medium"},
+            {"template_key": "to-apply-type-mix", "card_size": "Standard", "chart_height": "Medium"},
             {"template_key": "applied-progress-pie", "card_size": "Standard", "chart_height": "Medium"},
         ),
     },
 )
+
+DEFAULT_BOARD_AUTO_ADD_TEMPLATE_KEYS = {
+    "applied-ai-reliance",
+    "applied-over-time",
+    "applied-outcome-mix",
+    "applied-source-mix",
+    "to-apply-type-mix",
+}
 
 JOB_TABLE_SLUGS = {"to-apply", "applied"}
 
@@ -733,6 +836,10 @@ APPLICATION_STAGE_ORDER = [
     "Rejected",
     "Withdrawn",
 ]
+
+TERMINAL_APPLICATION_STAGES = {"Rejected", "Withdrawn", "Accepted", "Offer"}
+
+AI_RELIANCE_CATEGORY_ORDER = ("None", "Low", "Medium", "High", "Unspecified", "Other")
 
 JOB_KEYWORDS = (
     "job",
@@ -2238,6 +2345,41 @@ def infer_progress(record: GroupedRecord) -> str:
     return infer_progress_from_values(record.values)
 
 
+def normalize_ai_reliance_category(value: Any) -> str:
+    text = normalize_text(value)
+    if not text:
+        return "Unspecified"
+    lowered = text.lower()
+    if lowered in {"none", "no", "n", "na", "n/a", "not applicable", "no ai", "without ai"}:
+        return "None"
+
+    numeric_value = parse_number(text.replace("%", ""))
+    if numeric_value is not None:
+        if numeric_value <= 0:
+            return "None"
+        if numeric_value <= 33:
+            return "Low"
+        if numeric_value <= 66:
+            return "Medium"
+        return "High"
+
+    if any(token in lowered for token in ("high", "heavy", "full", "mostly", "strong", "extensive")):
+        return "High"
+    if any(token in lowered for token in ("medium", "moderate", "some", "partial", "assisted")):
+        return "Medium"
+    if any(token in lowered for token in ("low", "light", "minor", "little", "grammar", "proofread", "proofreading")):
+        return "Low"
+    return "Other"
+
+
+def dashboard_group_value(record: GroupedRecord, group_by_column: str) -> str:
+    if record.table.slug == "applied" and group_by_column == "application-progress":
+        return infer_progress(record)
+    if record.table.slug == "applied" and group_by_column == "ai-reliance":
+        return normalize_ai_reliance_category(record.values.get(group_by_column))
+    return normalize_text(record.values.get(group_by_column)) or "Unspecified"
+
+
 def record_application_history_event(
     user,
     table_slug: str,
@@ -2377,6 +2519,8 @@ def replace_applied_history_events(user, row_key: UUID | str, stage_dates: dict[
         user=user,
         table_slug="applied",
         record_row_key=row_uuid,
+    ).exclude(
+        event_type=ApplicationHistoryEvent.EventType.ADDED_TO_APPLY,
     ).delete()
 
     previous_stage = "Applied"
@@ -2493,7 +2637,7 @@ def build_application_history_timeline(
         ]
 
     timeline_items: list[dict[str, Any]] = []
-    plot_points: list[dict[str, str]] = []
+    plot_points: list[dict[str, Any]] = []
     for event in events:
         if event.event_type == ApplicationHistoryEvent.EventType.ADDED_TO_APPLY:
             title = "Added to To Apply"
@@ -2515,35 +2659,46 @@ def build_application_history_timeline(
                 "event_type": event.event_type,
             }
         )
+        event_stage = event.to_stage or event.from_stage or title
         plot_points.append(
             {
                 "x": event.occurred_at.isoformat(),
-                "y": event.to_stage or event.from_stage or title,
+                "stage": event_stage,
                 "text": description,
+                "title": title,
+                "date_display": timezone.localtime(event.occurred_at).strftime("%d/%m/%Y %H:%M"),
             }
         )
     stage_labels = [
         label
         for label in sorted(
-            {point["y"] for point in plot_points},
+            {point["stage"] for point in plot_points},
             key=application_stage_sort_key,
         )
     ]
+    stage_positions = {stage: index for index, stage in enumerate(stage_labels)}
 
     plot_config = {
         "data": [
             {
                 "type": "scatter",
-                "mode": "lines+markers+text",
+                "mode": "lines+markers",
                 "x": [point["x"] for point in plot_points],
-                "y": [point["y"] for point in plot_points],
-                "text": [point["text"] for point in plot_points],
-                "textposition": "top center",
-                "hovertemplate": "%{y}<br>%{x}<br>%{text}<extra></extra>",
-                "line": {"color": "#0ea5e9", "width": 3, "shape": "hv"},
+                "y": [stage_positions[point["stage"]] for point in plot_points],
+                "customdata": [
+                    [point["title"], point["stage"], point["date_display"], point["text"]]
+                    for point in plot_points
+                ],
+                "hovertemplate": (
+                    "<b>%{customdata[0]}</b><br>"
+                    "%{customdata[1]}<br>"
+                    "%{customdata[2]}<br>"
+                    "%{customdata[3]}<extra></extra>"
+                ),
+                "line": {"color": "rgba(14, 165, 233, 0.82)", "width": 3, "shape": "spline"},
                 "marker": {
-                    "size": 12,
-                    "color": [semantic_hex(point["y"]) for point in plot_points],
+                    "size": [15 if point["stage"] in TERMINAL_APPLICATION_STAGES else 12 for point in plot_points],
+                    "color": [semantic_hex(point["stage"]) for point in plot_points],
                     "line": {"color": "rgba(15, 23, 42, 0.18)", "width": 1},
                 },
             }
@@ -2552,17 +2707,27 @@ def build_application_history_timeline(
             "paper_bgcolor": "rgba(0,0,0,0)",
             "plot_bgcolor": "rgba(0,0,0,0)",
             "font": {"size": 12, "color": "#0f172a"},
-            "margin": {"l": 40, "r": 20, "t": 18, "b": 36},
+            "hovermode": "closest",
+            "margin": {"l": 110, "r": 24, "t": 18, "b": 48},
             "xaxis": {
                 "title": "Timeline",
                 "type": "date",
+                "tickformat": "%d/%m/%Y",
+                "hoverformat": "%d/%m/%Y %H:%M",
                 "showgrid": True,
                 "gridcolor": "rgba(148, 163, 184, 0.18)",
+                "showspikes": True,
+                "spikecolor": "rgba(14, 165, 233, 0.28)",
+                "spikethickness": 1,
             },
             "yaxis": {
                 "title": "Stage",
-                "categoryorder": "array",
-                "categoryarray": stage_labels,
+                "tickmode": "array",
+                "tickvals": list(range(len(stage_labels))),
+                "ticktext": stage_labels,
+                "range": [-0.5, max(len(stage_labels) - 0.5, 0.5)],
+                "showgrid": True,
+                "gridcolor": "rgba(148, 163, 184, 0.18)",
             },
         },
     }
@@ -2794,15 +2959,54 @@ def ensure_default_dashboard_boards(
     widget_records: list[GroupedRecord] | None = None,
 ) -> list[DashboardBoard]:
     existing_boards = list(DashboardBoard.objects.filter(user=user).prefetch_related("items"))
-    if existing_boards:
-        return existing_boards
-
     dashboard_records = widget_records if widget_records is not None else get_records(dashboard_table, user)
     widget_map = {
         normalize_text(record.values.get("template-key")): record
         for record in dashboard_records
         if normalize_text(record.values.get("template-key"))
     }
+    if existing_boards:
+        preset_by_name = {preset["name"]: preset for preset in DEFAULT_DASHBOARD_BOARD_PRESETS}
+        record_by_row_key = {record.row_key: record for record in dashboard_records}
+        for board in existing_boards:
+            preset = preset_by_name.get(board.name)
+            if not preset:
+                continue
+            existing_template_keys = {
+                normalize_text(record_by_row_key[item.widget_row_key].values.get("template-key"))
+                for item in board.items.all()
+                if item.widget_row_key in record_by_row_key
+            }
+            next_sort_order = (
+                board.items.order_by("-sort_order").values_list("sort_order", flat=True).first()
+                or 0
+            ) + 10
+            for widget_spec in preset["widgets"]:
+                template_key = widget_spec["template_key"]
+                if template_key not in DEFAULT_BOARD_AUTO_ADD_TEMPLATE_KEYS or template_key in existing_template_keys:
+                    continue
+                widget_record = widget_map.get(template_key)
+                if widget_record is None:
+                    widget_record = ensure_dashboard_widget_from_template(
+                        user,
+                        dashboard_table,
+                        template_key,
+                        existing_records=dashboard_records,
+                    )
+                    widget_map[template_key] = widget_record
+                    dashboard_records.append(widget_record)
+                    record_by_row_key[widget_record.row_key] = widget_record
+                DashboardBoardItem.objects.create(
+                    board=board,
+                    widget_row_key=widget_record.row_key,
+                    sort_order=next_sort_order,
+                    card_size=widget_spec["card_size"],
+                    chart_height=widget_spec["chart_height"],
+                )
+                existing_template_keys.add(template_key)
+                next_sort_order += 10
+        return existing_boards
+
     visible_widgets = sorted(
         [
             build_dashboard_widget(record, user)
@@ -2922,7 +3126,7 @@ def aggregate_records(
 
     grouped: dict[str, list[GroupedRecord]] = defaultdict(list)
     for record in records:
-        key = normalize_text(record.values.get(group_by_column)) or "Unspecified"
+        key = dashboard_group_value(record, group_by_column)
         grouped[key].append(record)
 
     labels: list[str] = []
@@ -2938,7 +3142,13 @@ def aggregate_records(
         values.append(float(total))
 
     group_by_definition = records[0].table.columns.filter(slug=group_by_column).first() if records else None
-    if group_by_definition and group_by_definition.data_type == DynamicColumn.DataType.DATE:
+    if records and records[0].table.slug == "applied" and group_by_column == "ai-reliance":
+        order_map = {label: index for index, label in enumerate(AI_RELIANCE_CATEGORY_ORDER)}
+        ordered = sorted(
+            zip(labels, values),
+            key=lambda item: (order_map.get(item[0], len(order_map)), item[0].lower()),
+        )
+    elif group_by_definition and group_by_definition.data_type == DynamicColumn.DataType.DATE:
         def date_group_key(item: tuple[str, float]) -> tuple[int, Any]:
             label = normalize_text(item[0])
             if not label or label == "Unspecified":
@@ -3034,15 +3244,37 @@ def build_applied_flow_sequences(user, applied_records: list[GroupedRecord]) -> 
         if not sequence:
             current_stage = infer_progress(record)
             if current_stage == "Applied":
-                sequence = ["Applied"]
+                sequence = ["To Apply", "Applied"]
             else:
-                sequence = ["Applied", current_stage]
+                sequence = ["To Apply", "Applied", current_stage]
+        else:
+            if "To Apply" not in sequence:
+                sequence.insert(0, "To Apply")
+            if "Applied" not in sequence:
+                if sequence[0] == "To Apply":
+                    sequence.insert(1, "Applied")
+                else:
+                    sequence.insert(0, "Applied")
+            current_stage = infer_progress(record)
+            if current_stage and sequence[-1] != current_stage:
+                sequence.append(current_stage)
         sequences.append(sequence)
     return sequences
 
 
-def build_applied_flow_chart(applied_records: list[GroupedRecord], user) -> dict[str, Any]:
-    if not applied_records:
+def applied_flow_node_label(stage: str, visit_count: int, current_count: int) -> str:
+    if current_count and visit_count and current_count != visit_count:
+        return f"{stage} ({current_count} current / {visit_count} total)"
+    return f"{stage} ({current_count or visit_count})"
+
+
+def build_applied_flow_chart(
+    applied_records: list[GroupedRecord],
+    user,
+    to_apply_records: list[GroupedRecord] | None = None,
+) -> dict[str, Any]:
+    to_apply_records = to_apply_records or []
+    if not applied_records and not to_apply_records:
         return {
             "title": "Applied Flow",
             "description": "Stage-to-stage application flow built from tracked history.",
@@ -3051,7 +3283,12 @@ def build_applied_flow_chart(applied_records: list[GroupedRecord], user) -> dict
             "chart_config": {"data": [], "layout": {}},
         }
 
-    sequences = build_applied_flow_sequences(user, applied_records)
+    sequences = [["To Apply"] for _record in to_apply_records]
+    sequences.extend(build_applied_flow_sequences(user, applied_records))
+    current_stage_counts = Counter()
+    if to_apply_records:
+        current_stage_counts["To Apply"] = len(to_apply_records)
+    current_stage_counts.update(infer_progress(record) for record in applied_records)
     stage_counts = Counter()
     transition_counts = Counter()
     for sequence in sequences:
@@ -3062,10 +3299,9 @@ def build_applied_flow_chart(applied_records: list[GroupedRecord], user) -> dict
 
     if not transition_counts:
         tracked_label = "Tracked"
-        current_stage_counts = Counter(infer_progress(record) for record in applied_records)
         node_keys = [tracked_label, *sorted(current_stage_counts, key=application_stage_sort_key)]
         node_labels = [
-            f"{tracked_label} ({len(applied_records)})",
+            f"{tracked_label} ({len(applied_records) + len(to_apply_records)})",
             *[
                 f"{stage} ({current_stage_counts[stage]})"
                 for stage in sorted(current_stage_counts, key=application_stage_sort_key)
@@ -3081,9 +3317,15 @@ def build_applied_flow_chart(applied_records: list[GroupedRecord], user) -> dict
             *[semantic_hex(stage, alpha=0.82) for stage in sorted(current_stage_counts, key=application_stage_sort_key)],
         ]
     else:
-        ordered_stages = sorted(stage_counts, key=application_stage_sort_key)
+        ordered_stages = sorted(
+            set(stage_counts) | set(current_stage_counts),
+            key=application_stage_sort_key,
+        )
         node_keys = ordered_stages
-        node_labels = [f"{stage} ({stage_counts[stage]})" for stage in ordered_stages]
+        node_labels = [
+            applied_flow_node_label(stage, stage_counts[stage], current_stage_counts[stage])
+            for stage in ordered_stages
+        ]
         node_indices = {label: index for index, label in enumerate(node_keys)}
         source = []
         target = []
@@ -3355,11 +3597,18 @@ def build_dashboard_widget(record: GroupedRecord, user) -> DashboardWidget:
             else:
                 kpi_value = "0"
         elif chart_type == "sankey":
-            kpi_value = str(len(source_records))
+            to_apply_flow_records: list[GroupedRecord] = []
+            if template_key == "applied-flow" and source_table_slug == "applied":
+                to_apply_flow_records = get_records(get_user_table(user, "to-apply"), user)
+            kpi_value = str(len(source_records) + len(to_apply_flow_records))
             if not metric_label:
-                metric_label = "Records in flow"
+                metric_label = "Tracked jobs in flow"
             if source_table_slug == "applied":
-                chart_config = build_applied_flow_chart(source_records, user)["chart_config"]
+                chart_config = build_applied_flow_chart(
+                    source_records,
+                    user,
+                    to_apply_records=to_apply_flow_records,
+                )["chart_config"]
             else:
                 chart_config = {"data": [], "layout": {}}
         elif chart_type == "waterfall":

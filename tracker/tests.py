@@ -41,6 +41,7 @@ from .services import (
     get_records,
     matches_any_keyword,
     move_to_applied,
+    replace_applied_history_events,
     save_record,
     scrape_jobs_from_portal,
     seed_sample_jobs_for_user,
@@ -282,6 +283,55 @@ class DynamicRecordServiceTests(TestCase):
         self.assertEqual(history[0].to_stage, "To Apply")
         self.assertEqual(history[-1].to_stage, "Applied")
 
+    def test_replacing_applied_history_dates_preserves_to_apply_event(self):
+        source_row_key = save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Vision PhD",
+                "url": "https://example.com/phd",
+                "type": "PhD",
+            },
+        )
+        moved_row_key = move_to_applied(
+            user=self.user,
+            applied_table=self.applied,
+            to_apply_table=self.to_apply,
+            values={"date": "2026-04-29"},
+            source_row_key=source_row_key,
+        )
+
+        replace_applied_history_events(
+            self.user,
+            moved_row_key,
+            {
+                "Applied": "2026-04-29",
+                "Rejected": "2026-05-03",
+            },
+        )
+
+        history = list(
+            ApplicationHistoryEvent.objects.filter(
+                user=self.user,
+                table_slug="applied",
+                record_row_key=moved_row_key,
+            )
+        )
+        self.assertTrue(
+            any(
+                event.event_type == ApplicationHistoryEvent.EventType.ADDED_TO_APPLY
+                and event.to_stage == "To Apply"
+                for event in history
+            )
+        )
+        self.assertTrue(
+            any(
+                event.event_type == ApplicationHistoryEvent.EventType.STAGE_CHANGE
+                and event.to_stage == "Rejected"
+                for event in history
+            )
+        )
+
     def test_move_to_applied_preserves_deadline_when_applied_tracks_it(self):
         tables = ensure_user_workspace(self.user)
         source_row_key = save_record(
@@ -342,6 +392,30 @@ class DynamicRecordServiceTests(TestCase):
         self.assertEqual(len(history), 2)
         self.assertEqual(history[-1].from_stage, "Applied")
         self.assertEqual(history[-1].to_stage, "Interview")
+
+    def test_application_progress_aggregation_uses_inferred_result_status(self):
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-29",
+                "role-title": "Vision PhD",
+                "url": "https://example.com/phd",
+                "type": "PhD",
+                "result": "Rejected",
+                "application-progress": "Applied",
+            },
+        )
+
+        labels, values = aggregate_records(
+            get_records(self.applied, self.user),
+            group_by_column="application-progress",
+            aggregation="count-records",
+            metric_column="",
+            limit=10,
+        )
+
+        self.assertEqual(dict(zip(labels, values)), {"Rejected": 1.0})
 
     def test_to_apply_list_shows_move_to_applied_button(self):
         source_row_key = save_record(
@@ -564,6 +638,99 @@ class DynamicRecordServiceTests(TestCase):
         self.assertIn("To Apply", "".join(sankey_data["node"]["label"]))
         self.assertTrue(sankey_data["link"]["value"])
 
+    def test_applied_flow_includes_to_apply_and_reconciles_current_progress(self):
+        save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Queued Role",
+                "url": "https://example.com/queued",
+                "type": "Job",
+            },
+        )
+        applied_row_key = save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-29",
+                "role-title": "Rejected Role",
+                "url": "https://example.com/rejected",
+                "type": "Job",
+                "result": "Rejected",
+                "application-progress": "Applied",
+            },
+        )
+        ApplicationHistoryEvent.objects.filter(
+            user=self.user,
+            table_slug="applied",
+            record_row_key=applied_row_key,
+            to_stage="Applied",
+        ).delete()
+
+        flow_chart = build_applied_flow_chart(
+            get_records(self.applied, self.user),
+            self.user,
+            to_apply_records=get_records(self.to_apply, self.user),
+        )
+
+        sankey_data = flow_chart["chart_config"]["data"][0]
+        node_labels = sankey_data["node"]["label"]
+        self.assertIn("To Apply (1 current / 2 total)", node_labels)
+        self.assertIn("Applied (1)", node_labels)
+        self.assertIn("Rejected (1)", node_labels)
+        links = sankey_data["link"]
+        edges = {
+            (node_labels[source], node_labels[target]): value
+            for source, target, value in zip(links["source"], links["target"], links["value"])
+        }
+        self.assertEqual(edges[("To Apply (1 current / 2 total)", "Applied (1)")], 1)
+        self.assertEqual(edges[("Applied (1)", "Rejected (1)")], 1)
+
+    def test_ai_reliance_chart_forces_values_into_categories(self):
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-29",
+                "role-title": "No AI Role",
+                "url": "https://example.com/no-ai",
+                "type": "Job",
+                "ai-reliance": "0%",
+            },
+        )
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-30",
+                "role-title": "Proofread Role",
+                "url": "https://example.com/proofread",
+                "type": "Job",
+                "ai-reliance": "just grammar proofreading",
+            },
+        )
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-05-01",
+                "role-title": "Heavy AI Role",
+                "url": "https://example.com/heavy-ai",
+                "type": "Job",
+                "ai-reliance": "mostly generated with AI",
+            },
+        )
+
+        labels, values = aggregate_records(
+            get_records(self.applied, self.user),
+            group_by_column="ai-reliance",
+            aggregation="count-records",
+            metric_column="",
+            limit=10,
+        )
+
+        self.assertEqual(dict(zip(labels, values)), {"None": 1.0, "Low": 1.0, "High": 1.0})
+
     def test_dashboard_includes_stage_timing_and_deadline_lead_widgets(self):
         ensure_user_workspace(self.user)
         seed_sample_jobs_for_user(self.user)
@@ -573,6 +740,11 @@ class DynamicRecordServiceTests(TestCase):
 
         self.assertIn("applied-stage-timing", widgets)
         self.assertIn("applied-deadline-lead", widgets)
+        self.assertIn("applied-ai-reliance", widgets)
+        self.assertIn("applied-over-time", widgets)
+        self.assertIn("applied-outcome-mix", widgets)
+        self.assertIn("applied-source-mix", widgets)
+        self.assertIn("to-apply-type-mix", widgets)
         self.assertIn("Applied", widgets["applied-stage-timing"].chart_config["labels"])
         self.assertTrue(widgets["applied-stage-timing"].chart_config["datasets"][0]["data"])
         self.assertEqual(
@@ -1672,6 +1844,7 @@ class NotificationWorkflowTests(TestCase):
             patch("tracker.notifications.SMTPHandler.is_configured", return_value=True),
             patch("tracker.notifications.SMTPHandler.from_env", return_value=smtp_context),
             patch("tracker.notifications.refresh_portals_for_user", return_value=[]),
+            patch("tracker.notifications.timezone.localtime", return_value=timezone.make_aware(datetime(2026, 5, 20, 9, 0))),
         ):
             processed = run_notifications(force=False, dry_run=False)
 
@@ -1704,6 +1877,7 @@ class NotificationWorkflowTests(TestCase):
         with (
             patch("tracker.notifications.SMTPHandler.is_configured", return_value=True),
             patch("tracker.notifications.SMTPHandler.from_env", return_value=smtp_context),
+            patch("tracker.notifications.timezone.localtime", return_value=timezone.make_aware(datetime(2026, 5, 20, 9, 0))),
         ):
             processed = run_notifications(force=False, dry_run=False)
 
