@@ -675,16 +675,16 @@ class DynamicRecordServiceTests(TestCase):
 
         sankey_data = flow_chart["chart_config"]["data"][0]
         node_labels = sankey_data["node"]["label"]
-        self.assertIn("To Apply (1 current / 2 total)", node_labels)
-        self.assertIn("Applied (0 current / 1 total)", node_labels)
-        self.assertIn("Rejected (1 current / 1 total)", node_labels)
+        self.assertIn("To Apply (2)", node_labels)
+        self.assertIn("Applied (1)", node_labels)
+        self.assertIn("Rejected (1)", node_labels)
         links = sankey_data["link"]
         edges = {
             (node_labels[source], node_labels[target]): value
             for source, target, value in zip(links["source"], links["target"], links["value"])
         }
-        self.assertEqual(edges[("To Apply (1 current / 2 total)", "Applied (0 current / 1 total)")], 1)
-        self.assertEqual(edges[("Applied (0 current / 1 total)", "Rejected (1 current / 1 total)")], 1)
+        self.assertEqual(edges[("To Apply (2)", "Applied (1)")], 1)
+        self.assertEqual(edges[("Applied (1)", "Rejected (1)")], 1)
 
     def test_ai_reliance_chart_forces_values_into_categories(self):
         tables = ensure_user_workspace(self.user)

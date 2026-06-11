@@ -3312,8 +3312,8 @@ def build_applied_flow_sequences(user, applied_records: list[GroupedRecord]) -> 
     return sequences
 
 
-def applied_flow_node_label(stage: str, visit_count: int, current_count: int) -> str:
-    return f"{stage} ({current_count} current / {visit_count} total)"
+def applied_flow_node_label(stage: str, visit_count: int, _current_count: int) -> str:
+    return f"{stage} ({visit_count})"
 
 
 def build_applied_flow_chart(
@@ -3349,7 +3349,7 @@ def build_applied_flow_chart(
         tracked_label = "Tracked"
         node_keys = [tracked_label, *sorted(current_stage_counts, key=application_stage_sort_key)]
         node_labels = [
-            f"{tracked_label} ({len(applied_records) + len(to_apply_records)} total)",
+            f"{tracked_label} ({len(applied_records) + len(to_apply_records)})",
             *[
                 applied_flow_node_label(stage, current_stage_counts[stage], current_stage_counts[stage])
                 for stage in sorted(current_stage_counts, key=application_stage_sort_key)
