@@ -841,6 +841,21 @@ TERMINAL_APPLICATION_STAGES = {"Rejected", "Withdrawn", "Accepted", "Offer"}
 
 AI_RELIANCE_CATEGORY_ORDER = ("None", "Low", "Medium", "High", "Unspecified", "Other")
 
+CATEGORICAL_COLOR_PALETTE = (
+    "#0ea5e9",
+    "#10b981",
+    "#f59e0b",
+    "#f43f5e",
+    "#8b5cf6",
+    "#14b8a6",
+    "#f97316",
+    "#2563eb",
+    "#ec4899",
+    "#84cc16",
+    "#06b6d4",
+    "#a855f7",
+)
+
 JOB_KEYWORDS = (
     "job",
     "career",
@@ -1055,36 +1070,71 @@ def matches_any_keyword(text: str, keywords: list[str] | tuple[str, ...]) -> boo
     return any(matches_normalized_keyword(normalized_text, keyword) for keyword in keywords)
 
 
-def semantic_hex(value: str, *, alpha: float | None = None) -> str:
-    normalized = normalize_text(value).lower()
-    color = "#64748b"
-    if normalized in {"rejected", "withdrawn"}:
-        color = "#f43f5e"
-    elif normalized in {"offer", "accepted"}:
-        color = "#10b981"
-    elif "interview" in normalized:
-        color = "#f59e0b"
-    elif normalized in {"screening", "assignment"}:
-        color = "#8b5cf6"
-    elif normalized in {"applied", "pending"}:
-        color = "#0ea5e9"
-    elif normalized in {"phd"}:
-        color = "#2563eb"
-    elif normalized in {"postdoc"}:
-        color = "#14b8a6"
-    elif normalized in {"internship", "intern"}:
-        color = "#f97316"
-    elif normalized in {"job"}:
-        color = "#475569"
-    if alpha is None:
-        return color
+def hex_to_rgba(color: str, alpha: float) -> str:
     color = color.lstrip("#")
     red, green, blue = tuple(int(color[index : index + 2], 16) for index in (0, 2, 4))
     return f"rgba({red}, {green}, {blue}, {alpha})"
 
 
-def label_color_palette(labels: list[str]) -> list[str]:
-    return [semantic_hex(label, alpha=0.78) for label in labels]
+def semantic_base_color(value: str) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in {"", "null", "nan"}:
+        return None
+    if normalized in {"rejected", "withdrawn"}:
+        return "#f43f5e"
+    if normalized in {"offer", "accepted", "low"}:
+        return "#10b981"
+    if "interview" in normalized or normalized == "medium":
+        return "#f59e0b"
+    if normalized in {"screening", "assignment", "other"}:
+        return "#8b5cf6"
+    if normalized in {"applied", "pending"}:
+        return "#0ea5e9"
+    if normalized in {"high"}:
+        return "#ef4444"
+    if normalized == "none":
+        return "#64748b"
+    if normalized == "unspecified":
+        return "#94a3b8"
+    if normalized in {"phd"}:
+        return "#2563eb"
+    if normalized in {"postdoc"}:
+        return "#14b8a6"
+    if normalized in {"internship", "intern"}:
+        return "#f97316"
+    if normalized in {"job"}:
+        return "#475569"
+    return None
+
+
+def semantic_hex(value: str, *, alpha: float | None = None) -> str:
+    color = semantic_base_color(value) or "#64748b"
+    if alpha is None:
+        return color
+    return hex_to_rgba(color, alpha)
+
+
+def categorical_color_for_label(label: str, index: int, *, alpha: float | None = None) -> str:
+    color = semantic_base_color(label) or CATEGORICAL_COLOR_PALETTE[index % len(CATEGORICAL_COLOR_PALETTE)]
+    if alpha is None:
+        return color
+    return hex_to_rgba(color, alpha)
+
+
+def label_color_palette(labels: list[str], *, alpha: float = 0.78) -> list[str]:
+    return [
+        categorical_color_for_label(label, index, alpha=alpha)
+        for index, label in enumerate(labels)
+    ]
+
+
+def label_border_palette(labels: list[str]) -> list[str]:
+    return [
+        categorical_color_for_label(label, index)
+        for index, label in enumerate(labels)
+    ]
 
 
 def make_unique_table_slug(user, name: str) -> str:
@@ -3217,7 +3267,7 @@ def build_applied_job_type_chart(applied_records: list[GroupedRecord]) -> dict[s
                     "label": "Applied job types",
                     "data": values,
                     "backgroundColor": label_color_palette(labels),
-                    "borderColor": [semantic_hex(label) for label in labels],
+                    "borderColor": label_border_palette(labels),
                     "borderWidth": 1,
                 }
             ],
@@ -3263,9 +3313,7 @@ def build_applied_flow_sequences(user, applied_records: list[GroupedRecord]) -> 
 
 
 def applied_flow_node_label(stage: str, visit_count: int, current_count: int) -> str:
-    if current_count and visit_count and current_count != visit_count:
-        return f"{stage} ({current_count} current / {visit_count} total)"
-    return f"{stage} ({current_count or visit_count})"
+    return f"{stage} ({current_count} current / {visit_count} total)"
 
 
 def build_applied_flow_chart(
@@ -3301,9 +3349,9 @@ def build_applied_flow_chart(
         tracked_label = "Tracked"
         node_keys = [tracked_label, *sorted(current_stage_counts, key=application_stage_sort_key)]
         node_labels = [
-            f"{tracked_label} ({len(applied_records) + len(to_apply_records)})",
+            f"{tracked_label} ({len(applied_records) + len(to_apply_records)} total)",
             *[
-                f"{stage} ({current_stage_counts[stage]})"
+                applied_flow_node_label(stage, current_stage_counts[stage], current_stage_counts[stage])
                 for stage in sorted(current_stage_counts, key=application_stage_sort_key)
             ],
         ]
@@ -3621,7 +3669,7 @@ def build_dashboard_widget(record: GroupedRecord, user) -> DashboardWidget:
                         "label": record.label,
                         "data": values,
                         "backgroundColor": label_color_palette(labels),
-                        "borderColor": [semantic_hex(label) for label in labels],
+                        "borderColor": label_border_palette(labels),
                         "borderWidth": 1,
                     }
                 ],

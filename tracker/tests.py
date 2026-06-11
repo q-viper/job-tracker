@@ -676,53 +676,58 @@ class DynamicRecordServiceTests(TestCase):
         sankey_data = flow_chart["chart_config"]["data"][0]
         node_labels = sankey_data["node"]["label"]
         self.assertIn("To Apply (1 current / 2 total)", node_labels)
-        self.assertIn("Applied (1)", node_labels)
-        self.assertIn("Rejected (1)", node_labels)
+        self.assertIn("Applied (0 current / 1 total)", node_labels)
+        self.assertIn("Rejected (1 current / 1 total)", node_labels)
         links = sankey_data["link"]
         edges = {
             (node_labels[source], node_labels[target]): value
             for source, target, value in zip(links["source"], links["target"], links["value"])
         }
-        self.assertEqual(edges[("To Apply (1 current / 2 total)", "Applied (1)")], 1)
-        self.assertEqual(edges[("Applied (1)", "Rejected (1)")], 1)
+        self.assertEqual(edges[("To Apply (1 current / 2 total)", "Applied (0 current / 1 total)")], 1)
+        self.assertEqual(edges[("Applied (0 current / 1 total)", "Rejected (1 current / 1 total)")], 1)
 
     def test_ai_reliance_chart_forces_values_into_categories(self):
+        tables = ensure_user_workspace(self.user)
+        applied_table = tables["applied"]
         save_record(
-            self.applied,
+            applied_table,
             self.user,
             {
                 "date": "2026-04-29",
                 "role-title": "No AI Role",
                 "url": "https://example.com/no-ai",
                 "type": "Job",
+                "source": "LinkedIn",
                 "ai-reliance": "0%",
             },
         )
         save_record(
-            self.applied,
+            applied_table,
             self.user,
             {
                 "date": "2026-04-30",
                 "role-title": "Proofread Role",
                 "url": "https://example.com/proofread",
                 "type": "Job",
+                "source": "Referral",
                 "ai-reliance": "just grammar proofreading",
             },
         )
         save_record(
-            self.applied,
+            applied_table,
             self.user,
             {
                 "date": "2026-05-01",
                 "role-title": "Heavy AI Role",
                 "url": "https://example.com/heavy-ai",
                 "type": "Job",
+                "source": "University Careers",
                 "ai-reliance": "mostly generated with AI",
             },
         )
 
         labels, values = aggregate_records(
-            get_records(self.applied, self.user),
+            get_records(applied_table, self.user),
             group_by_column="ai-reliance",
             aggregation="count-records",
             metric_column="",
@@ -730,6 +735,18 @@ class DynamicRecordServiceTests(TestCase):
         )
 
         self.assertEqual(dict(zip(labels, values)), {"None": 1.0, "Low": 1.0, "High": 1.0})
+        dashboard_payload = build_dashboard(self.user)
+        widgets = {widget.template_key: widget for widget in dashboard_payload["all_dashboard_widgets"]}
+        ai_dataset = widgets["applied-ai-reliance"].chart_config["datasets"][0]
+        source_dataset = widgets["applied-source-mix"].chart_config["datasets"][0]
+        self.assertEqual(
+            len(set(ai_dataset["backgroundColor"])),
+            len(ai_dataset["backgroundColor"]),
+        )
+        self.assertEqual(
+            len(set(source_dataset["backgroundColor"])),
+            len(source_dataset["backgroundColor"]),
+        )
 
     def test_dashboard_includes_stage_timing_and_deadline_lead_widgets(self):
         ensure_user_workspace(self.user)
