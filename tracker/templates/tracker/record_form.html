@@ -117,7 +117,7 @@
             const sourceSelect = document.getElementById("id_source_row_key");
             const sourceRecords = JSON.parse("{{ source_records_json|escapejs }}");
             const sourceMap = Object.fromEntries(sourceRecords.map((item) => [item.row_key, item.values]));
-            const targetFields = ["role-title", "url", "type", "deadline", "number-of-positions"];
+            const targetFields = ["role-title", "name", "source", "url", "type", "deadline", "number-of-positions", "country"];
 
             if (sourceSelect) {
                 sourceSelect.addEventListener("change", (event) => {

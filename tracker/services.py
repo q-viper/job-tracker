@@ -56,7 +56,7 @@ DEFAULT_WORKBOOK_HEADERS = {
         "Remarks",
     ],
     "portals": ["URL", "Name"],
-    "to-apply": ["URL", "Deadline", "Type", "English Test"],
+    "to-apply": ["URL", "Name", "Source", "Deadline", "Type", "English Test"],
 }
 
 DEPRECATED_COLUMN_SLUGS = {"s-n", "sn"}
@@ -369,6 +369,20 @@ EXTRA_COLUMNS = {
             "placeholder": "Research Assistant, Computer Vision",
         },
         {
+            "name": "Name",
+            "slug": "name",
+            "data_type": DynamicColumn.DataType.TEXT,
+            "insert_after": "role-title",
+            "placeholder": "Company, university, or organization",
+        },
+        {
+            "name": "Source",
+            "slug": "source",
+            "data_type": DynamicColumn.DataType.TEXT,
+            "insert_after": "name",
+            "placeholder": "LinkedIn, referral, careers page",
+        },
+        {
             "name": "Number of Positions",
             "slug": "number-of-positions",
             "data_type": DynamicColumn.DataType.NUMBER,
@@ -422,7 +436,7 @@ EXTRA_COLUMNS = {
             "data_type": DynamicColumn.DataType.STATUS,
             "choices_text": (
                 "Applied, Screening, Interview, Technical Interview, "
-                "Assignment, Offer, Rejected, Accepted"
+                "Assignment, Offer, Rejected, Accepted, Withdrawn"
             ),
             "insert_after": "result-on",
         },
@@ -2038,6 +2052,7 @@ def save_record(
     row_key: UUID | str | None = None,
     metadata_map: dict[str, dict[str, Any]] | None = None,
     skip_history: bool = False,
+    apply_inference: bool = True,
 ) -> UUID:
     if table.owner_id != user.id:
         raise PermissionError("You can only edit your own tables.")
@@ -2045,11 +2060,15 @@ def save_record(
     row_uuid = UUID(str(row_key)) if row_key else uuid4()
     metadata_map = metadata_map or {}
     existing_record = get_record(table, user, row_uuid) if row_key else None
-    prepared_values = apply_inferred_record_values(
-        table,
-        values,
-        existing_values=existing_record.values if existing_record else None,
-    )
+    if apply_inference:
+        prepared_values = apply_inferred_record_values(
+            table,
+            values,
+            existing_values=existing_record.values if existing_record else None,
+        )
+    else:
+        prepared_values = dict(existing_record.values if existing_record else {})
+        prepared_values.update(values)
 
     columns = list(table.columns.all())
     by_slug = {column.slug: column for column in columns}
@@ -2382,6 +2401,8 @@ def infer_progress_from_values(values: dict[str, Any]) -> str:
         normalized = result.lower()
         if normalized == "rejected":
             return "Rejected"
+        if normalized == "withdrawn":
+            return "Withdrawn"
         if normalized in {"offer", "accepted"}:
             return result.title()
     if progress:
@@ -2453,6 +2474,44 @@ def record_application_history_event(
     )
 
 
+def ensure_to_apply_history_precedes_applied(user, row_key: UUID | str) -> None:
+    row_uuid = UUID(str(row_key))
+    first_applied_at = (
+        ApplicationHistoryEvent.objects.filter(
+            user=user,
+            table_slug="applied",
+            record_row_key=row_uuid,
+            event_type=ApplicationHistoryEvent.EventType.APPLIED,
+        )
+        .order_by("occurred_at", "id")
+        .values_list("occurred_at", flat=True)
+        .first()
+    )
+    if not first_applied_at:
+        return
+
+    to_apply_events = list(
+        ApplicationHistoryEvent.objects.filter(
+            user=user,
+            table_slug="applied",
+            record_row_key=row_uuid,
+            event_type=ApplicationHistoryEvent.EventType.ADDED_TO_APPLY,
+        ).order_by("occurred_at", "id")
+    )
+    events_to_move = [
+        event
+        for event in to_apply_events
+        if event.occurred_at >= first_applied_at
+    ]
+    if not events_to_move:
+        return
+
+    first_moved_at = first_applied_at - timedelta(minutes=len(events_to_move))
+    for index, event in enumerate(events_to_move):
+        event.occurred_at = first_moved_at + timedelta(minutes=index)
+        event.save(update_fields=["occurred_at"])
+
+
 def sync_job_history_for_saved_record(
     table: DynamicTable,
     user,
@@ -2496,6 +2555,7 @@ def sync_job_history_for_saved_record(
             occurred_at=applied_at,
             notes="Application submitted.",
         )
+        ensure_to_apply_history_precedes_applied(user, row_key)
         current_stage = infer_progress_from_values(prepared_values)
         if current_stage != "Applied":
             record_application_history_event(
@@ -2524,6 +2584,7 @@ def sync_job_history_for_saved_record(
             to_stage=current_stage,
             notes=f"Progress changed from {previous_stage} to {current_stage}.",
         )
+        ensure_to_apply_history_precedes_applied(user, row_key)
 
 
 def get_application_history_events(user, table_slug: str, row_key: UUID | str) -> list[ApplicationHistoryEvent]:
@@ -2602,6 +2663,7 @@ def replace_applied_history_events(user, row_key: UUID | str, stage_dates: dict[
         )
         previous_stage = stage
         previous_time = occurred_at
+    ensure_to_apply_history_precedes_applied(user, row_uuid)
 
 
 def get_application_history_events_map(
@@ -3275,6 +3337,26 @@ def build_applied_job_type_chart(applied_records: list[GroupedRecord]) -> dict[s
     }
 
 
+def canonical_applied_flow_sequence(stages: list[str]) -> list[str]:
+    observed_stages: set[str] = set()
+    custom_stages: list[str] = []
+    for stage in stages:
+        normalized_stage = normalize_text(stage)
+        if not normalized_stage:
+            continue
+        observed_stages.add(normalized_stage)
+        if normalized_stage not in APPLICATION_STAGE_ORDER and normalized_stage not in custom_stages:
+            custom_stages.append(normalized_stage)
+
+    observed_stages.update({"To Apply", "Applied"})
+    ordered_stages = [
+        stage
+        for stage in APPLICATION_STAGE_ORDER
+        if stage in observed_stages
+    ]
+    return ordered_stages + custom_stages
+
+
 def build_applied_flow_sequences(user, applied_records: list[GroupedRecord]) -> list[list[str]]:
     history_by_row = get_application_history_events_map(
         user,
@@ -3308,6 +3390,7 @@ def build_applied_flow_sequences(user, applied_records: list[GroupedRecord]) -> 
             current_stage = infer_progress(record)
             if current_stage and sequence[-1] != current_stage:
                 sequence.append(current_stage)
+        sequence = canonical_applied_flow_sequence(sequence)
         sequences.append(sequence)
     return sequences
 
@@ -3816,9 +3899,11 @@ def move_to_applied(
         merged_values,
         row_key=source_row_key or None,
         metadata_map=source_metadata,
+        apply_inference=False if source_row_key else True,
     )
     if source_row_key:
         move_application_related_data(user, to_apply_table.slug, applied_table.slug, source_row_key)
+        ensure_to_apply_history_precedes_applied(user, source_row_key)
         delete_record(to_apply_table, user, source_row_key, cleanup_related=False)
     return row_uuid
 
@@ -4041,9 +4126,12 @@ def add_portal_job_to_to_apply(user, suggestion: PortalJobSuggestion) -> UUID:
         user,
         {
             "role-title": suggestion.title,
+            "name": suggestion.portal_name or suggestion.portal_url,
+            "source": suggestion.portal_name or suggestion.portal_url,
             "url": suggestion.url,
             "type": infer_application_type(suggestion.title),
         },
+        apply_inference=False,
     )
     suggestion.added_to_apply = True
     suggestion.save(update_fields=["added_to_apply"])

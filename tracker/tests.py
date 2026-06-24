@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -32,12 +32,14 @@ from .notifications import notification_due_users, run_notifications, send_notif
 from .rag import chat_with_rag
 from .services import (
     aggregate_records,
+    add_portal_job_to_to_apply,
     build_applied_flow_chart,
     build_active_applied_pipeline_chart,
     build_dashboard,
     delete_record,
     ensure_user_workspace,
     extract_jobs_from_portal_html,
+    get_record,
     get_records,
     matches_any_keyword,
     move_to_applied,
@@ -282,6 +284,7 @@ class DynamicRecordServiceTests(TestCase):
         )
         self.assertEqual(history[0].to_stage, "To Apply")
         self.assertEqual(history[-1].to_stage, "Applied")
+        self.assertLess(history[0].occurred_at, history[-1].occurred_at)
 
     def test_replacing_applied_history_dates_preserves_to_apply_event(self):
         source_row_key = save_record(
@@ -331,6 +334,9 @@ class DynamicRecordServiceTests(TestCase):
                 for event in history
             )
         )
+        ordered_history = sorted(history, key=lambda event: (event.occurred_at, event.id))
+        self.assertEqual(ordered_history[0].to_stage, "To Apply")
+        self.assertEqual(ordered_history[1].to_stage, "Applied")
 
     def test_move_to_applied_preserves_deadline_when_applied_tracks_it(self):
         tables = ensure_user_workspace(self.user)
@@ -355,6 +361,66 @@ class DynamicRecordServiceTests(TestCase):
 
         applied_record = next(record for record in get_records(tables["applied"], self.user) if record.row_key == source_row_key)
         self.assertEqual(applied_record.values["deadline"], "2026-05-15")
+
+    def test_move_to_applied_does_not_infer_or_scrape_url_fields(self):
+        tables = ensure_user_workspace(self.user)
+        source_row_key = save_record(
+            tables["to-apply"],
+            self.user,
+            {
+                "role-title": "Portal Role",
+                "name": "Saved Organization",
+                "source": "Saved Portal",
+                "url": "https://example.com/jobs/wrong-title-if-scraped",
+                "type": "Job",
+            },
+            apply_inference=False,
+        )
+
+        with patch("tracker.services.infer_fields_from_url") as infer_mock:
+            move_to_applied(
+                user=self.user,
+                applied_table=tables["applied"],
+                to_apply_table=tables["to-apply"],
+                values={"date": "2026-05-01"},
+                source_row_key=source_row_key,
+            )
+
+        infer_mock.assert_not_called()
+        applied_record = next(record for record in get_records(tables["applied"], self.user) if record.row_key == source_row_key)
+        self.assertEqual(applied_record.values["role-title"], "Portal Role")
+        self.assertEqual(applied_record.values["name"], "Saved Organization")
+        self.assertEqual(applied_record.values["source"], "Saved Portal")
+
+    def test_portal_suggestion_adds_context_to_to_apply(self):
+        tables = ensure_user_workspace(self.user)
+        portal_row_key = save_record(
+            tables["portals"],
+            self.user,
+            {
+                "url": "https://jobs.example.com",
+                "name": "Example Careers",
+            },
+            apply_inference=False,
+        )
+        suggestion = PortalJobSuggestion.objects.create(
+            user=self.user,
+            portal_table=tables["portals"],
+            portal_row_key=portal_row_key,
+            portal_name="Example Careers",
+            portal_url="https://jobs.example.com",
+            title="Computer Vision Researcher",
+            url="https://jobs.example.com/computer-vision-researcher",
+            summary="Research role",
+        )
+
+        row_key = add_portal_job_to_to_apply(self.user, suggestion)
+
+        record = get_record(tables["to-apply"], self.user, row_key)
+        self.assertIsNotNone(record)
+        self.assertEqual(record.values["role-title"], "Computer Vision Researcher")
+        self.assertEqual(record.values["name"], "Example Careers")
+        self.assertEqual(record.values["source"], "Example Careers")
 
     def test_applied_progress_change_creates_history_event(self):
         row_key = save_record(
@@ -686,6 +752,68 @@ class DynamicRecordServiceTests(TestCase):
         self.assertEqual(edges[("To Apply (2)", "Applied (1)")], 1)
         self.assertEqual(edges[("Applied (1)", "Rejected (1)")], 1)
 
+    def test_applied_flow_routes_withdrawn_records_through_applied(self):
+        row_key = save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-04-29",
+                "role-title": "Withdrawn Role",
+                "url": "https://example.com/withdrawn",
+                "type": "Job",
+                "result": "Withdrawn",
+                "application-progress": "Applied",
+            },
+        )
+        ApplicationHistoryEvent.objects.filter(
+            user=self.user,
+            table_slug="applied",
+            record_row_key=row_key,
+        ).delete()
+        record_application_events = [
+            (
+                ApplicationHistoryEvent.EventType.APPLIED,
+                "",
+                "Applied",
+                timezone.now() - timedelta(days=4),
+            ),
+            (
+                ApplicationHistoryEvent.EventType.ADDED_TO_APPLY,
+                "",
+                "To Apply",
+                timezone.now() - timedelta(days=3),
+            ),
+            (
+                ApplicationHistoryEvent.EventType.STAGE_CHANGE,
+                "To Apply",
+                "Withdrawn",
+                timezone.now() - timedelta(days=1),
+            ),
+        ]
+        for event_type, from_stage, to_stage, occurred_at in record_application_events:
+            ApplicationHistoryEvent.objects.create(
+                user=self.user,
+                table_slug="applied",
+                record_row_key=row_key,
+                event_type=event_type,
+                from_stage=from_stage,
+                to_stage=to_stage,
+                occurred_at=occurred_at,
+            )
+
+        flow_chart = build_applied_flow_chart(get_records(self.applied, self.user), self.user)
+
+        sankey_data = flow_chart["chart_config"]["data"][0]
+        node_labels = sankey_data["node"]["label"]
+        links = sankey_data["link"]
+        edges = {
+            (node_labels[source], node_labels[target]): value
+            for source, target, value in zip(links["source"], links["target"], links["value"])
+        }
+        self.assertEqual(edges[("To Apply (1)", "Applied (1)")], 1)
+        self.assertEqual(edges[("Applied (1)", "Withdrawn (1)")], 1)
+        self.assertNotIn(("To Apply (1)", "Withdrawn (1)"), edges)
+
     def test_ai_reliance_chart_forces_values_into_categories(self):
         tables = ensure_user_workspace(self.user)
         applied_table = tables["applied"]
@@ -910,6 +1038,8 @@ class DynamicRecordServiceTests(TestCase):
             tables["applied"].columns.get(slug="deadline").data_type,
             DynamicColumn.DataType.DATE,
         )
+        self.assertEqual(tables["to-apply"].columns.get(slug="name").name, "Name")
+        self.assertEqual(tables["to-apply"].columns.get(slug="source").name, "Source")
 
     def test_job_forms_show_number_of_positions_field(self):
         self.client.force_login(self.user)
@@ -921,6 +1051,8 @@ class DynamicRecordServiceTests(TestCase):
         self.assertEqual(applied_response.status_code, 200)
         self.assertContains(to_apply_response, 'name="number-of-positions"')
         self.assertContains(applied_response, 'name="number-of-positions"')
+        self.assertContains(to_apply_response, 'name="name"')
+        self.assertContains(to_apply_response, 'name="source"')
 
     def test_applied_form_uses_clear_labels_for_ambiguous_fields(self):
         DynamicColumn.objects.create(
