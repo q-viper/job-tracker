@@ -3260,13 +3260,14 @@ def aggregate_records(
             zip(labels, values),
             key=lambda item: (order_map.get(item[0], len(order_map)), item[0].lower()),
         )
-    elif group_by_definition and group_by_definition.data_type == DynamicColumn.DataType.DATE:
+    elif is_date_grouping_column(group_by_column, group_by_definition):
         def date_group_key(item: tuple[str, float]) -> tuple[int, Any]:
             label = normalize_text(item[0])
             if not label or label == "Unspecified":
                 return (1, "")
+            normalized_date = normalize_date_value(label)
             try:
-                return (0, datetime.fromisoformat(label).date())
+                return (0, datetime.fromisoformat(normalized_date).date())
             except ValueError:
                 return (1, label.lower())
 
@@ -3279,6 +3280,18 @@ def aggregate_records(
         return [], []
     sorted_labels, sorted_values = zip(*ordered)
     return list(sorted_labels), list(sorted_values)
+
+
+def is_date_grouping_column(group_by_column: str, column: DynamicColumn | None) -> bool:
+    if column and column.data_type == DynamicColumn.DataType.DATE:
+        return True
+    normalized = normalize_text(group_by_column).lower()
+    return (
+        normalized in {"date", "deadline", "result-on", "created_at", "updated_at", "application-date", "applied-date"}
+        or normalized.endswith("-date")
+        or normalized.endswith("_date")
+        or normalized.endswith("-on")
+    )
 
 
 def chart_type_slug(value: str) -> str:

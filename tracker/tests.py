@@ -898,6 +898,37 @@ class DynamicRecordServiceTests(TestCase):
         )
         self.assertIn("Applied late", widgets["applied-deadline-lead"].chart_config["labels"])
 
+    def test_applications_over_time_sorts_date_axis_ascending(self):
+        tables = ensure_user_workspace(self.user)
+        tables["applied"].columns.filter(slug="date").update(data_type=DynamicColumn.DataType.TEXT)
+        for label, applied_on in (
+            ("Latest Role", "2026-06-10"),
+            ("Earliest Role", "2026-06-01"),
+            ("Middle Role", "2026-06-05"),
+        ):
+            save_record(
+                tables["applied"],
+                self.user,
+                {
+                    "date": applied_on,
+                    "role-title": label,
+                    "url": f"https://example.com/{label.lower().replace(' ', '-')}",
+                    "type": "Job",
+                },
+            )
+
+        dashboard_payload = build_dashboard(self.user)
+        widget = next(
+            item
+            for item in dashboard_payload["all_dashboard_widgets"]
+            if item.template_key == "applied-over-time"
+        )
+
+        self.assertEqual(
+            widget.chart_config["labels"],
+            ["2026-06-01", "2026-06-05", "2026-06-10"],
+        )
+
     def test_build_dashboard_includes_default_panel_layout(self):
         ensure_user_workspace(self.user)
 
