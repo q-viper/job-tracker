@@ -41,6 +41,7 @@ from .services import (
     extract_jobs_from_portal_html,
     get_record,
     get_records,
+    infer_fields_from_url_details,
     matches_any_keyword,
     move_to_applied,
     replace_applied_history_events,
@@ -1805,6 +1806,127 @@ class DynamicRecordServiceTests(TestCase):
         self.assertEqual(response["Content-Type"], "text/event-stream")
         self.assertIn("event: portal_done", body)
         self.assertIn("event: done", body)
+
+    def test_url_inference_reads_jobposting_json_ld_without_raw_employment_type(self):
+        html = """
+        <html>
+            <head>
+                <meta property="og:site_name" content="Example Careers">
+                <script type="application/ld+json">
+                {
+                    "@context": "https://schema.org",
+                    "@graph": [
+                        {
+                            "@type": "JobPosting",
+                            "title": "Computer Vision Research Engineer",
+                            "employmentType": "FULL_TIME",
+                            "validThrough": "2026-08-31T23:59:00Z",
+                            "description": "<p>Build reliable perception systems.</p>",
+                            "hiringOrganization": {"@type": "Organization", "name": "Example Robotics"},
+                            "jobLocation": {
+                                "@type": "Place",
+                                "address": {"@type": "PostalAddress", "addressCountry": "DE"}
+                            }
+                        }
+                    ]
+                }
+                </script>
+            </head>
+        </html>
+        """
+
+        with (
+            patch("tracker.services.safe_get_url", return_value=SimpleNamespace(text=html)),
+            patch("tracker.services.fetch_portal_html_in_browser") as browser_fetch,
+        ):
+            result = infer_fields_from_url_details("https://jobs.example.com/research-engineer")
+
+        values = result["values"]
+        self.assertTrue(result["scrape_succeeded"])
+        self.assertEqual(result["source"], "page")
+        self.assertEqual(values["role-title"], "Computer Vision Research Engineer")
+        self.assertEqual(values["name"], "Example Robotics")
+        self.assertEqual(values["source"], "Example Careers")
+        self.assertEqual(values["type"], "Job")
+        self.assertEqual(values["deadline"], "2026-08-31")
+        self.assertEqual(values["country"], "Germany")
+        browser_fetch.assert_not_called()
+
+    def test_url_inference_api_only_returns_empty_field_suggestions(self):
+        tables = ensure_user_workspace(self.user)
+        self.client.force_login(self.user)
+
+        with patch(
+            "tracker.api.infer_fields_from_url_details",
+            return_value={
+                "values": {
+                    "role-title": "Scraped Role",
+                    "name": "Scraped Organization",
+                    "source": "Scraped Source",
+                    "type": "Job",
+                    "country": "Germany",
+                },
+                "scrape_succeeded": True,
+                "source": "page",
+                "detail": "",
+            },
+        ):
+            response = self.client.post(
+                reverse("api_infer_record_from_url"),
+                data=json.dumps(
+                    {
+                        "table_slug": tables["to-apply"].slug,
+                        "url": "https://example.com/jobs/scraped-role",
+                        "values": {
+                            "role-title": "Already Typed",
+                            "source": "",
+                            "type": "",
+                            "country": "",
+                        },
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertNotIn("role-title", payload["values"])
+        self.assertEqual(payload["values"]["source"], "Scraped Source")
+        self.assertEqual(payload["values"]["type"], "Job")
+        self.assertEqual(payload["values"]["country"], "Germany")
+        self.assertTrue(payload["scrape_succeeded"])
+
+    def test_url_inference_api_reports_when_no_fields_can_be_inferred(self):
+        tables = ensure_user_workspace(self.user)
+        self.client.force_login(self.user)
+
+        with patch(
+            "tracker.api.infer_fields_from_url_details",
+            return_value={
+                "values": {},
+                "scrape_succeeded": False,
+                "source": "url",
+                "detail": "blocked",
+            },
+        ):
+            response = self.client.post(
+                reverse("api_infer_record_from_url"),
+                data=json.dumps(
+                    {
+                        "table_slug": tables["to-apply"].slug,
+                        "url": "https://example.com/jobs/no-details",
+                        "values": {},
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["values"], {})
+        self.assertFalse(payload["scrape_succeeded"])
+        self.assertIn("Could not read enough job details", payload["detail"])
+        self.assertEqual(payload["error_detail"], "blocked")
 
     def test_scrape_jobs_from_portal_falls_back_to_selenium_after_403(self):
         blocked_error = requests.HTTPError("403 Client Error: Forbidden for url")

@@ -175,66 +175,157 @@
     {% endif %}
 
     <script>
-        const urlInput = document.getElementById("id_url");
-        const urlInferenceStatus = document.getElementById("url-inference-status");
-        let lastInferredUrl = "";
+        (() => {
+            const tableSlug = "{{ table.slug }}";
+            const urlInput = document.getElementById("id_url");
+            const recordForm = document.getElementById("record-form");
+            const urlInferenceStatus = document.getElementById("url-inference-status");
+            const inferenceTargetSlugs = ["role-title", "name", "source", "type", "remarks", "deadline", "country"];
+            const csrfInput = document.querySelector("#quassi-csrf-form input[name=csrfmiddlewaretoken], #record-form input[name=csrfmiddlewaretoken]");
+            let inferenceTimer = null;
+            let activeRequest = null;
+            let lastInferenceKey = "";
 
-        function updateInferenceStatus(message, tone = "muted") {
-            if (!urlInferenceStatus) {
+            if (!urlInput || !recordForm || !urlInferenceStatus || !["to-apply", "applied"].includes(tableSlug)) {
                 return;
             }
-            const classes = {
-                muted: "text-slate-500 dark:text-slate-400",
-                busy: "text-sky-600 dark:text-sky-300",
-                success: "text-emerald-600 dark:text-emerald-300",
-                error: "text-rose-600",
-            };
-            urlInferenceStatus.className = `mt-2 text-xs ${classes[tone] || classes.muted}`;
-            urlInferenceStatus.textContent = message;
-        }
 
-        async function inferFromUrl() {
-            if (!urlInput) {
-                return;
+            function updateInferenceStatus(message, tone = "muted") {
+                const classes = {
+                    muted: "text-slate-500 dark:text-slate-400",
+                    busy: "text-sky-600 dark:text-sky-300",
+                    success: "text-emerald-600 dark:text-emerald-300",
+                    warning: "text-amber-600 dark:text-amber-300",
+                    error: "text-rose-600",
+                };
+                urlInferenceStatus.className = `mt-2 text-xs ${classes[tone] || classes.muted}`;
+                urlInferenceStatus.textContent = message;
             }
-            const urlValue = (urlInput.value || "").trim();
-            if (!urlValue || urlValue === lastInferredUrl || !/^https?:\/\//i.test(urlValue)) {
-                return;
+
+            function fieldForSlug(slug) {
+                return document.getElementById(`id_${slug}`);
             }
-            lastInferredUrl = urlValue;
-            updateInferenceStatus("Looking up the page and filling what I can...", "busy");
-            try {
-                const response = await fetch("{{ url_inference_api_url }}", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "X-CSRFToken": document.querySelector("#quassi-csrf-form input[name=csrfmiddlewaretoken]").value,
-                    },
-                    body: JSON.stringify({
-                        table_slug: "{{ table.slug }}",
-                        url: urlValue,
-                    }),
+
+            function fieldIsEmpty(slug) {
+                const field = fieldForSlug(slug);
+                return Boolean(field && !(field.value || "").trim());
+            }
+
+            function fieldLabel(slug) {
+                const field = fieldForSlug(slug);
+                const label = field ? document.querySelector(`label[for="${field.id}"]`) : null;
+                return (label?.textContent || slug.replaceAll("-", " ")).trim().replace(/\s+/g, " ");
+            }
+
+            function collectFormValues() {
+                const values = {};
+                const formData = new FormData(recordForm);
+                formData.forEach((value, key) => {
+                    if (key !== "csrfmiddlewaretoken") {
+                        values[key] = String(value || "");
+                    }
                 });
-                const payload = await response.json();
-                if (!response.ok) {
-                    throw new Error(payload.detail || "Could not infer fields from that URL.");
+                return values;
+            }
+
+            function emptyTargetSlugs() {
+                return inferenceTargetSlugs.filter(fieldIsEmpty);
+            }
+
+            function scheduleInference(delay = 500) {
+                window.clearTimeout(inferenceTimer);
+                inferenceTimer = window.setTimeout(() => inferFromUrl(), delay);
+            }
+
+            async function inferFromUrl() {
+                const urlValue = (urlInput.value || "").trim();
+                if (!urlValue || !/^https?:\/\//i.test(urlValue)) {
+                    return;
                 }
-                Object.entries(payload.values || {}).forEach(([slug, value]) => {
-                    const field = document.getElementById(`id_${slug}`);
-                    if (!field || field.value) {
+
+                const emptySlugs = emptyTargetSlugs();
+                if (!emptySlugs.length) {
+                    updateInferenceStatus("All inference fields already have values, so nothing was overwritten.", "muted");
+                    return;
+                }
+
+                const currentValues = collectFormValues();
+                const inferenceKey = `${urlValue}|${emptySlugs.join(",")}`;
+                if (inferenceKey === lastInferenceKey) {
+                    return;
+                }
+                lastInferenceKey = inferenceKey;
+
+                if (activeRequest) {
+                    activeRequest.abort();
+                }
+                activeRequest = new AbortController();
+                updateInferenceStatus("Looking up the page and filling empty fields where possible...", "busy");
+
+                try {
+                    const response = await fetch("{{ url_inference_api_url }}", {
+                        method: "POST",
+                        signal: activeRequest.signal,
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-CSRFToken": csrfInput ? csrfInput.value : "",
+                        },
+                        body: JSON.stringify({
+                            table_slug: tableSlug,
+                            url: urlValue,
+                            values: currentValues,
+                        }),
+                    });
+                    const payload = await response.json();
+                    if (!response.ok) {
+                        throw new Error(payload.detail || "Could not infer fields from that URL.");
+                    }
+
+                    const filledLabels = [];
+                    const skippedLabels = [];
+                    Object.entries(payload.values || {}).forEach(([slug, value]) => {
+                        const field = fieldForSlug(slug);
+                        if (!field || !String(value || "").trim()) {
+                            return;
+                        }
+                        if ((field.value || "").trim()) {
+                            skippedLabels.push(fieldLabel(slug));
+                            return;
+                        }
+                        field.value = value;
+                        field.dispatchEvent(new Event("change", { bubbles: true }));
+                        filledLabels.push(fieldLabel(slug));
+                    });
+
+                    if (filledLabels.length) {
+                        const suffix = payload.scrape_succeeded
+                            ? ""
+                            : " These were URL-based guesses because the page could not be read fully.";
+                        updateInferenceStatus(`Filled ${filledLabels.join(", ")}.${suffix}`, payload.scrape_succeeded ? "success" : "warning");
                         return;
                     }
-                    field.value = value;
-                });
-                updateInferenceStatus("Fields were inferred from the page. You can still edit anything before saving.", "success");
-            } catch (error) {
-                updateInferenceStatus(error.message || "Could not infer fields from that URL.", "error");
-            }
-        }
 
-        if (urlInput) {
-            urlInput.addEventListener("blur", inferFromUrl);
-            urlInput.addEventListener("change", inferFromUrl);
-        }
+                    if (skippedLabels.length) {
+                        updateInferenceStatus(`Found ${skippedLabels.join(", ")}, but those fields already had values, so nothing was overwritten.`, "muted");
+                        return;
+                    }
+
+                    updateInferenceStatus(payload.detail || "Could not infer empty fields from that URL.", payload.scrape_succeeded ? "warning" : "error");
+                } catch (error) {
+                    if (error.name === "AbortError") {
+                        return;
+                    }
+                    lastInferenceKey = "";
+                    updateInferenceStatus(error.message || "Could not infer fields from that URL.", "error");
+                } finally {
+                    activeRequest = null;
+                }
+            }
+
+            urlInput.addEventListener("paste", () => scheduleInference(150));
+            urlInput.addEventListener("input", () => scheduleInference(700));
+            urlInput.addEventListener("blur", () => scheduleInference(0));
+            urlInput.addEventListener("change", () => scheduleInference(0));
+        })();
     </script>
 {% endblock %}

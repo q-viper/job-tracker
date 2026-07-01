@@ -16,13 +16,14 @@ from .serializers import (
 )
 from .services import (
     add_portal_job_to_to_apply,
-    apply_inferred_record_values,
     build_dashboard,
     get_record,
     get_records,
     get_user_table,
     infer_application_type,
+    infer_fields_from_url_details,
     move_to_applied,
+    normalize_text,
     refresh_portal_jobs,
     save_record,
 )
@@ -235,6 +236,15 @@ class ClearChatHistoryAPIView(APIView):
 
 class InferRecordFromUrlAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    target_field_slugs = (
+        "role-title",
+        "name",
+        "source",
+        "type",
+        "remarks",
+        "deadline",
+        "country",
+    )
 
     def post(self, request):
         table_slug = (request.data.get("table_slug") or "").strip()
@@ -245,8 +255,36 @@ class InferRecordFromUrlAPIView(APIView):
         values = request.data.get("values")
         if not isinstance(values, dict):
             values = {}
-        inferred = apply_inferred_record_values(table, {"url": url, **values})
-        return Response({"values": inferred})
+        result = infer_fields_from_url_details(url)
+        available_slugs = set(table.columns.values_list("slug", flat=True))
+        candidate_values = result.get("values") if isinstance(result.get("values"), dict) else {}
+        suggestions = {
+            slug: normalize_text(candidate_values.get(slug))
+            for slug in self.target_field_slugs
+            if slug in available_slugs
+            and not normalize_text(values.get(slug))
+            and normalize_text(candidate_values.get(slug))
+        }
+
+        if suggestions:
+            detail = "Suggested fields from the job page."
+            if not result.get("scrape_succeeded"):
+                detail = "The page could not be read fully, so these are URL-based guesses."
+        elif result.get("scrape_succeeded"):
+            detail = "The page loaded, but no new empty fields could be inferred confidently."
+        else:
+            detail = "Could not read enough job details from that page. Add the role, organization, type, and notes manually."
+
+        return Response(
+            {
+                "values": suggestions,
+                "candidate_values": candidate_values,
+                "scrape_succeeded": bool(result.get("scrape_succeeded")),
+                "source": result.get("source") or "url",
+                "detail": detail,
+                "error_detail": result.get("detail") or "",
+            }
+        )
 
 
 class RagChatAPIView(APIView):

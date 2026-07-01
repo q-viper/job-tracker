@@ -1386,45 +1386,192 @@ def extract_host_name(url: str) -> str:
     return host.split(".")[0].replace("-", " ").title() if host else ""
 
 
-def infer_fields_from_url(url: str) -> dict[str, str]:
-    inferred = {
-        "source": extract_host_name(url),
-        "name": extract_host_name(url),
-    }
+GENERIC_JOB_SOURCE_TERMS = {
+    "ashby",
+    "bamboohr",
+    "career",
+    "careers",
+    "greenhouse",
+    "indeed",
+    "job",
+    "jobs",
+    "lever",
+    "linkedin",
+    "personio",
+    "recruitee",
+    "smartrecruiters",
+    "teamtailor",
+    "workable",
+    "workday",
+}
+
+COUNTRY_CODE_NAMES = {
+    "AT": "Austria",
+    "BE": "Belgium",
+    "CH": "Switzerland",
+    "DE": "Germany",
+    "DK": "Denmark",
+    "ES": "Spain",
+    "FI": "Finland",
+    "FR": "France",
+    "GB": "United Kingdom",
+    "IT": "Italy",
+    "NL": "Netherlands",
+    "NO": "Norway",
+    "SE": "Sweden",
+    "UK": "United Kingdom",
+    "US": "United States",
+    "USA": "United States",
+}
+
+
+def jsonld_items(payload: Any):
+    if isinstance(payload, list):
+        for item in payload:
+            yield from jsonld_items(item)
+        return
+    if not isinstance(payload, dict):
+        return
+    graph = payload.get("@graph")
+    if isinstance(graph, list):
+        for item in graph:
+            yield from jsonld_items(item)
+    yield payload
+
+
+def jsonld_type_matches(item: dict[str, Any], expected_type: str) -> bool:
+    raw_type = item.get("@type") or item.get("type")
+    if isinstance(raw_type, list):
+        return any(normalize_text(value).lower() == expected_type for value in raw_type)
+    return normalize_text(raw_type).lower() == expected_type
+
+
+def first_text_value(value: Any) -> str:
+    if isinstance(value, list):
+        for item in value:
+            cleaned = first_text_value(item)
+            if cleaned:
+                return cleaned
+        return ""
+    if isinstance(value, dict):
+        for key in ("name", "text", "value"):
+            cleaned = normalize_text(value.get(key))
+            if cleaned:
+                return cleaned
+        return ""
+    return normalize_text(value)
+
+
+def normalize_country_value(value: Any) -> str:
+    if isinstance(value, list):
+        for item in value:
+            cleaned = normalize_country_value(item)
+            if cleaned:
+                return cleaned
+        return ""
+    if isinstance(value, dict):
+        return normalize_country_value(value.get("name") or value.get("addressCountry"))
+    cleaned = normalize_text(value)
+    if not cleaned:
+        return ""
+    return COUNTRY_CODE_NAMES.get(cleaned.upper(), cleaned)
+
+
+def normalize_schema_date(value: Any) -> str:
+    cleaned = first_text_value(value)
+    if not cleaned:
+        return ""
     try:
-        response = safe_get_url(url, timeout=12)
-        soup = BeautifulSoup(response.text, "html.parser")
-    except Exception:
-        fallback_title = guess_title_from_url(url)
-        if fallback_title:
-            inferred["role-title"] = fallback_title
-        return inferred
+        return datetime.fromisoformat(cleaned.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return normalize_date_value(cleaned[:10])
+
+
+def clean_title_candidate(value: str) -> str:
+    cleaned = normalize_text(value)
+    cleaned = re.sub(r"\b(job|jobs|career|careers|opening|vacancy)\b$", "", cleaned, flags=re.IGNORECASE).strip(" -|")
+    return cleaned
+
+
+def clean_organization_candidate(value: str) -> str:
+    cleaned = normalize_text(value)
+    cleaned = re.sub(r"\b(careers?|jobs?|job board|open positions?)\b$", "", cleaned, flags=re.IGNORECASE).strip(" -|")
+    return cleaned
+
+
+def source_name_is_generic(value: str) -> bool:
+    lowered = normalize_text(value).lower()
+    if not lowered:
+        return True
+    words = set(re.findall(r"[a-z0-9]+", lowered))
+    return bool(words & GENERIC_JOB_SOURCE_TERMS)
+
+
+def split_page_title(value: str) -> tuple[str, str]:
+    parts = [
+        part.strip()
+        for part in re.split(r"\s(?:\||-|\u2013|\u2014|\u00b7)\s", normalize_text(value))
+        if part.strip()
+    ]
+    if not parts:
+        return "", ""
+    role_title = clean_title_candidate(parts[0])
+    organization = clean_organization_candidate(parts[-1]) if len(parts) > 1 else ""
+    return role_title, organization
+
+
+def extract_location_country(job_posting: dict[str, Any]) -> str:
+    raw_locations = job_posting.get("jobLocation")
+    locations = raw_locations if isinstance(raw_locations, list) else [raw_locations]
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        address = location.get("address")
+        if isinstance(address, dict):
+            country = normalize_country_value(address.get("addressCountry"))
+            if country:
+                return country
+    applicant_location = job_posting.get("applicantLocationRequirements")
+    return normalize_country_value(applicant_location)
+
+
+def parse_job_fields_from_html(url: str, html: str) -> dict[str, str]:
+    soup = BeautifulSoup(html, "html.parser")
+    source_name = extract_host_name(url)
+    inferred: dict[str, str] = {}
+    if source_name:
+        inferred["source"] = source_name
 
     page_title = ""
     employment_type = ""
     organization_name = ""
     long_description = ""
+
     for script_tag in soup.find_all("script", attrs={"type": "application/ld+json"}):
         try:
             script_payload = json.loads(script_tag.string or "")
         except Exception:
             continue
-        payload_items = script_payload if isinstance(script_payload, list) else [script_payload]
-        for item in payload_items:
-            if not isinstance(item, dict):
+        for item in jsonld_items(script_payload):
+            if not isinstance(item, dict) or not jsonld_type_matches(item, "jobposting"):
                 continue
-            item_type = normalize_text(item.get("@type") or item.get("type")).lower()
-            if item_type != "jobposting":
-                continue
-            page_title = normalize_text(item.get("title")) or page_title
-            employment_type = normalize_text(item.get("employmentType")) or employment_type
+            page_title = first_text_value(item.get("title")) or page_title
+            employment_type = first_text_value(item.get("employmentType")) or employment_type
             organization = item.get("hiringOrganization")
             if isinstance(organization, dict):
-                organization_name = normalize_text(organization.get("name")) or organization_name
+                organization_name = first_text_value(organization.get("name")) or organization_name
+            elif isinstance(organization, list):
+                organization_name = first_text_value(organization) or organization_name
             long_description = BeautifulSoup(
-                normalize_text(item.get("description")),
+                first_text_value(item.get("description")),
                 "html.parser",
             ).get_text(" ", strip=True)[:600]
+            deadline = normalize_schema_date(item.get("validThrough"))
+            if deadline:
+                inferred["deadline"] = deadline
+            country = extract_location_country(item)
+            if country:
+                inferred["country"] = country
             break
         if page_title:
             break
@@ -1447,36 +1594,107 @@ def infer_fields_from_url(url: str) -> dict[str, str]:
     site_tag = soup.find("meta", property="og:site_name")
     if site_tag and site_tag.get("content"):
         site_name = normalize_text(site_tag["content"])
-
-    if page_title:
-        role_title = re.split(r"\s[\|\-]\s", page_title)[0].strip()
-        if role_title:
-            inferred["role-title"] = role_title
-        if not site_name:
-            parts = re.split(r"\s[\|\-]\s", page_title)
-            if len(parts) > 1:
-                site_name = parts[-1].strip()
-
-    if organization_name:
-        site_name = organization_name
     if site_name:
-        inferred["name"] = site_name
         inferred["source"] = site_name
 
+    title_role, title_organization = split_page_title(page_title)
+    if title_role:
+        inferred["role-title"] = title_role
+
+    if organization_name:
+        inferred["name"] = organization_name
+    elif title_organization and not source_name_is_generic(title_organization):
+        source_value = normalize_text(inferred.get("source"))
+        if title_organization.casefold() != source_value.casefold():
+            inferred["name"] = title_organization
+
     description_tag = soup.find("meta", attrs={"name": "description"})
-    if description_tag and description_tag.get("content"):
-        inferred["remarks"] = normalize_text(description_tag["content"])[:400]
-    elif long_description:
+    if long_description:
         inferred["remarks"] = long_description[:400]
+    elif description_tag and description_tag.get("content"):
+        inferred["remarks"] = normalize_text(description_tag["content"])[:400]
 
-    if employment_type and "type" not in inferred:
-        inferred["type"] = employment_type
+    type_source = " ".join(
+        item
+        for item in (
+            inferred.get("role-title", ""),
+            employment_type,
+            inferred.get("remarks", ""),
+        )
+        if item
+    )
+    if type_source:
+        inferred["type"] = infer_application_type(type_source)
 
-    inferred_type_source = normalize_text(inferred.get("role-title")) or normalize_text(page_title)
-    if inferred_type_source and not normalize_text(inferred.get("type")):
-        inferred["type"] = infer_application_type(inferred_type_source)
+    return {key: value for key, value in inferred.items() if normalize_text(value)}
 
-    return inferred
+
+def infer_fields_from_url_details(url: str, allow_browser: bool = True) -> dict[str, Any]:
+    source_name = extract_host_name(url)
+    fallback_values = {"source": source_name} if source_name else {}
+    fallback_title = guess_title_from_url(url)
+    if fallback_title:
+        fallback_values["role-title"] = fallback_title
+        fallback_values["type"] = infer_application_type(fallback_title)
+
+    static_error = ""
+    browser_error = ""
+    parsed_values: dict[str, str] = {}
+    source = "url"
+    should_try_browser = portal_fetch_mode() == "browser"
+
+    try:
+        response = safe_get_url(url, timeout=12)
+        parsed_values = parse_job_fields_from_html(url, response.text)
+        source = "page"
+        if portal_html_looks_blocked(response.text):
+            parsed_values = {}
+            static_error = "The page looked blocked or JavaScript-only."
+            should_try_browser = True
+        elif not parsed_values.get("role-title"):
+            should_try_browser = True
+    except Exception as exc:
+        static_error = str(exc)
+        should_try_browser = should_retry_portal_with_browser(exc) or portal_fetch_mode() == "browser"
+
+    should_try_browser = allow_browser and should_try_browser and portal_fetch_mode() != "requests"
+    if parsed_values and not should_try_browser:
+        return {
+            "values": parsed_values,
+            "scrape_succeeded": True,
+            "source": source,
+            "detail": "",
+        }
+
+    if should_try_browser:
+        try:
+            browser_html = fetch_portal_html_in_browser(url, timeout=min(portal_browser_timeout_seconds(), 15))
+            browser_values = parse_job_fields_from_html(url, browser_html)
+            if browser_values.get("role-title") or len(browser_values) > len(parsed_values):
+                parsed_values = browser_values
+                source = "browser"
+        except Exception as exc:
+            browser_error = str(exc)
+
+    if parsed_values:
+        return {
+            "values": parsed_values,
+            "scrape_succeeded": True,
+            "source": source,
+            "detail": "",
+        }
+
+    detail = browser_error or static_error or "No recognizable job details were found on the page."
+    return {
+        "values": fallback_values,
+        "scrape_succeeded": False,
+        "source": "url",
+        "detail": detail,
+    }
+
+
+def infer_fields_from_url(url: str) -> dict[str, str]:
+    return infer_fields_from_url_details(url, allow_browser=False)["values"]
 
 
 def fallback_specs() -> dict[str, dict[str, Any]]:
@@ -2025,7 +2243,7 @@ def apply_inferred_record_values(
 
     fields_to_fill = [
         field_name
-        for field_name in ("role-title", "name", "source", "remarks")
+        for field_name in ("role-title", "name", "source", "remarks", "deadline", "country")
         if not normalize_text(merged_values.get(field_name))
     ]
     if fields_to_fill:
