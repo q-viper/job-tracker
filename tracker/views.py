@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from io import BytesIO
 import logging
 import json
@@ -40,10 +41,12 @@ from .models import (
     DashboardBoard,
     DashboardBoardItem,
     DashboardPanelPreference,
+    DynamicColumn,
     DynamicTable,
     PortalJobSuggestion,
 )
 from .services import (
+    APPLICATION_STAGE_ORDER,
     add_application_tags,
     add_dashboard_widget_to_board,
     add_portal_job_to_to_apply,
@@ -71,6 +74,9 @@ from .services import (
     make_unique_column_slug,
     make_unique_table_slug,
     move_to_applied,
+    normalize_date_value,
+    normalize_text,
+    parse_number,
     parse_tag_names,
     replace_applied_history_events,
     refresh_all_portal_jobs_for_user,
@@ -452,6 +458,22 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
     page_title = ""
     page_description = ""
     nav_section = ""
+    filterable_table_slugs = {"to-apply", "applied"}
+    categorical_filter_slugs = {
+        "ai-reliance",
+        "application-progress",
+        "country",
+        "english-test",
+        "result",
+        "source",
+        "type",
+    }
+    filter_operator_options = [
+        {"value": "eq", "label": "=="},
+        {"value": "ne", "label": "!="},
+        {"value": "gt", "label": ">"},
+        {"value": "lt", "label": "<"},
+    ]
 
     def get_table(self) -> DynamicTable:
         return get_user_table(self.request.user, self.table_slug)
@@ -488,6 +510,171 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
             for tag in ApplicationTag.objects.filter(user=request_user).order_by("name")
         ]
 
+    def dynamic_filter_enabled(self, table: DynamicTable) -> bool:
+        return table.slug in self.filterable_table_slugs
+
+    def get_filter_columns(self, table: DynamicTable) -> list[DynamicColumn]:
+        if not self.dynamic_filter_enabled(table):
+            return []
+        columns = list(table.columns.filter(is_visible=True).order_by("position", "id"))
+        if table.slug == "to-apply" and not any(column.slug == "application-progress" for column in columns):
+            columns.insert(
+                0,
+                DynamicColumn(
+                    table=table,
+                    name="Application Progress",
+                    slug="application-progress",
+                    data_type=DynamicColumn.DataType.STATUS,
+                    choices_text="To Apply",
+                ),
+            )
+        return columns
+
+    def get_filter_column_options(self, table: DynamicTable) -> list[dict[str, str]]:
+        return [
+            {"value": column.slug, "label": column.name, "data_type": column.data_type}
+            for column in self.get_filter_columns(table)
+        ]
+
+    def get_default_filter_column(self, table: DynamicTable) -> str:
+        columns = self.get_filter_columns(table)
+        slugs = {column.slug for column in columns}
+        for preferred_slug in ("application-progress", "type"):
+            if preferred_slug in slugs:
+                return preferred_slug
+        return columns[0].slug if columns else ""
+
+    def get_filter_column_slug(self, table: DynamicTable) -> str:
+        allowed = {column.slug for column in self.get_filter_columns(table)}
+        requested = (self.request.GET.get("filter_column") or "").strip()
+        if requested in allowed:
+            return requested
+        return self.get_default_filter_column(table)
+
+    def get_filter_column(self, table: DynamicTable) -> DynamicColumn | None:
+        selected_slug = self.get_filter_column_slug(table)
+        for column in self.get_filter_columns(table):
+            if column.slug == selected_slug:
+                return column
+        return None
+
+    def get_filter_operator(self) -> str:
+        allowed = {option["value"] for option in self.filter_operator_options}
+        requested = (self.request.GET.get("filter_operator") or "").strip()
+        return requested if requested in allowed else "eq"
+
+    def get_filter_value(self) -> str:
+        return (self.request.GET.get("filter_value") or "").strip()
+
+    def get_record_filter_value(self, record, column: DynamicColumn) -> str:
+        if record.table.slug == "to-apply" and column.slug == "application-progress":
+            return "To Apply"
+        if record.table.slug == "applied" and column.slug == "application-progress":
+            return infer_progress(record)
+        return normalize_text(record.values.get(column.slug))
+
+    def is_exact_filter_column(self, column: DynamicColumn) -> bool:
+        return column.data_type in {DynamicColumn.DataType.STATUS, DynamicColumn.DataType.DATE, DynamicColumn.DataType.NUMBER}
+
+    def should_offer_filter_value_options(self, column: DynamicColumn) -> bool:
+        return column.data_type == DynamicColumn.DataType.STATUS or column.slug in self.categorical_filter_slugs
+
+    def parse_filter_date(self, value: str):
+        normalized = normalize_date_value(value)
+        if not normalized:
+            return None
+        try:
+            return datetime.fromisoformat(normalized).date()
+        except ValueError:
+            return None
+
+    def text_filter_matches(self, actual: str, expected: str, column: DynamicColumn, operator: str) -> bool:
+        actual_folded = actual.casefold()
+        expected_folded = expected.casefold()
+        if operator in {"eq", "ne"}:
+            if self.is_exact_filter_column(column):
+                matched = actual_folded == expected_folded
+            else:
+                matched = expected_folded in actual_folded
+            return matched if operator == "eq" else not matched
+        if not actual_folded:
+            return False
+        if operator == "gt":
+            return actual_folded > expected_folded
+        if operator == "lt":
+            return actual_folded < expected_folded
+        return True
+
+    def record_matches_dynamic_filter(self, record, column: DynamicColumn, operator: str, expected_value: str) -> bool:
+        actual_value = self.get_record_filter_value(record, column)
+        if operator in {"gt", "lt"}:
+            if column.data_type == DynamicColumn.DataType.DATE:
+                actual_date = self.parse_filter_date(actual_value)
+                expected_date = self.parse_filter_date(expected_value)
+                if actual_date is None or expected_date is None:
+                    return False
+                return actual_date > expected_date if operator == "gt" else actual_date < expected_date
+            if column.data_type == DynamicColumn.DataType.NUMBER:
+                actual_number = parse_number(actual_value)
+                expected_number = parse_number(expected_value)
+                if actual_number is None or expected_number is None:
+                    return False
+                return actual_number > expected_number if operator == "gt" else actual_number < expected_number
+        if column.data_type == DynamicColumn.DataType.DATE and operator in {"eq", "ne"}:
+            actual_date = self.parse_filter_date(actual_value)
+            expected_date = self.parse_filter_date(expected_value)
+            matched = actual_date is not None and actual_date == expected_date
+            return matched if operator == "eq" else not matched
+        if column.data_type == DynamicColumn.DataType.NUMBER and operator in {"eq", "ne"}:
+            actual_number = parse_number(actual_value)
+            expected_number = parse_number(expected_value)
+            matched = actual_number is not None and expected_number is not None and actual_number == expected_number
+            return matched if operator == "eq" else not matched
+        return self.text_filter_matches(actual_value, expected_value, column, operator)
+
+    def apply_dynamic_filter(self, records, table: DynamicTable):
+        if not self.dynamic_filter_enabled(table):
+            return records
+        expected_value = self.get_filter_value()
+        if not expected_value:
+            return records
+        column = self.get_filter_column(table)
+        if not column:
+            return records
+        operator = self.get_filter_operator()
+        return [
+            record
+            for record in records
+            if self.record_matches_dynamic_filter(record, column, operator, expected_value)
+        ]
+
+    def get_filter_value_options(self, table: DynamicTable, records) -> dict[str, list[str]]:
+        options_by_column: dict[str, list[str]] = {}
+        for column in self.get_filter_columns(table):
+            values: list[str] = []
+            if self.should_offer_filter_value_options(column):
+                if table.slug == "applied" and column.slug == "application-progress":
+                    values.extend(stage for stage in APPLICATION_STAGE_ORDER if stage != "To Apply")
+                values.extend(column.choices_list)
+                values.extend(self.get_record_filter_value(record, column) for record in records)
+
+            deduped: list[str] = []
+            seen: set[str] = set()
+            for value in values:
+                cleaned = normalize_text(value)
+                if not cleaned:
+                    continue
+                key = cleaned.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(cleaned)
+
+            if column.slug != "application-progress":
+                deduped = sorted(deduped, key=str.casefold)
+            options_by_column[column.slug] = deduped[:100]
+        return options_by_column
+
     def filter_records_for_display(self, records, table: DynamicTable):
         keyword = (self.request.GET.get("q") or "").strip().lower()
         if keyword:
@@ -500,6 +687,7 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
                 if all(token in haystack for token in tokens):
                     filtered.append(record)
             records = filtered
+        records = self.apply_dynamic_filter(records, table)
         tag_filter = self.get_tag_filter(table)
         if not tag_filter:
             return records
@@ -671,7 +859,9 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         table = self.get_table()
-        records = self.sort_records_for_display(get_records(table, self.request.user), table)
+        all_records = get_records(table, self.request.user)
+        records = self.sort_records_for_display(all_records, table)
+        filter_value_options = self.get_filter_value_options(table, all_records)
         context.update(
             {
                 "table": table,
@@ -689,6 +879,13 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
                 "tag_filter": self.get_tag_filter(table),
                 "search_query": (self.request.GET.get("q") or "").strip(),
                 "tag_filter_options": self.get_tag_filter_options(table),
+                "dynamic_filter_enabled": self.dynamic_filter_enabled(table),
+                "filter_column_options": self.get_filter_column_options(table),
+                "filter_operator_options": self.filter_operator_options,
+                "filter_column": self.get_filter_column_slug(table),
+                "filter_operator": self.get_filter_operator(),
+                "filter_value": self.get_filter_value(),
+                "filter_value_options": filter_value_options,
                 "extra_actions": self.get_extra_actions(table),
                 "bulk_actions": self.get_bulk_actions(table),
                 "bulk_action_url": self.get_bulk_action_url(table),

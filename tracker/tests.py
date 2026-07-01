@@ -1165,6 +1165,142 @@ class DynamicRecordServiceTests(TestCase):
         self.assertContains(response, "Alpha Role")
         self.assertNotContains(response, "Beta Role")
 
+    def test_applied_dynamic_filter_ignores_blank_value_and_defaults_to_progress(self):
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-05-01",
+                "role-title": "Applied Role",
+                "url": "https://example.com/applied-role",
+                "type": "Job",
+                "application-progress": "Applied",
+            },
+        )
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-05-02",
+                "role-title": "Interview Role",
+                "url": "https://example.com/interview-role",
+                "type": "Job",
+                "application-progress": "Interview",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(
+            reverse("applied_list"),
+            {"filter_column": "application-progress", "filter_operator": "eq", "filter_value": ""},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["filter_column"], "application-progress")
+        self.assertEqual(response.context["filter_operator"], "eq")
+        self.assertContains(response, "Applied Role")
+        self.assertContains(response, "Interview Role")
+        self.assertIn("Rejected", response.context["filter_value_options"]["application-progress"])
+        self.assertIn("Withdrawn", response.context["filter_value_options"]["application-progress"])
+
+    def test_applied_dynamic_filter_uses_inferred_application_progress(self):
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-05-01",
+                "role-title": "Plain Applied Role",
+                "url": "https://example.com/plain-applied",
+                "type": "Job",
+                "application-progress": "Applied",
+            },
+        )
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-05-02",
+                "role-title": "Rejected Applied Role",
+                "url": "https://example.com/rejected-applied",
+                "type": "Job",
+                "result": "Rejected",
+                "application-progress": "Applied",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(
+            reverse("applied_list"),
+            {"filter_column": "application-progress", "filter_operator": "eq", "filter_value": "Rejected"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Rejected Applied Role")
+        self.assertNotContains(response, "Plain Applied Role")
+
+    def test_to_apply_dynamic_filter_defaults_to_virtual_application_progress(self):
+        save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Queued Role",
+                "url": "https://example.com/queued-role",
+                "type": "Job",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("to_apply_list"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["filter_column"], "application-progress")
+        self.assertEqual(response.context["filter_operator"], "eq")
+        self.assertEqual(response.context["filter_value"], "")
+        self.assertIn("To Apply", response.context["filter_value_options"]["application-progress"])
+        self.assertContains(response, "Queued Role")
+
+    def test_to_apply_dynamic_filter_supports_categorical_options_and_not_equals(self):
+        DynamicColumn.objects.create(
+            table=self.to_apply,
+            name="Country",
+            slug="country",
+            data_type=DynamicColumn.DataType.TEXT,
+            position=99,
+        )
+        save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "Germany Job",
+                "url": "https://example.com/germany-job",
+                "type": "Job",
+                "country": "Germany",
+            },
+        )
+        save_record(
+            self.to_apply,
+            self.user,
+            {
+                "role-title": "France PhD",
+                "url": "https://example.com/france-phd",
+                "type": "PhD",
+                "country": "France",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(
+            reverse("to_apply_list"),
+            {"filter_column": "type", "filter_operator": "ne", "filter_value": "PhD"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Germany Job")
+        self.assertNotContains(response, "France PhD")
+        self.assertEqual(response.context["filter_column"], "type")
+        self.assertIn("Germany", response.context["filter_value_options"]["country"])
+        self.assertIn("France", response.context["filter_value_options"]["country"])
+
     def test_rag_returns_matching_records_from_user_tables(self):
         save_record(
             self.to_apply,

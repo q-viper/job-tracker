@@ -31,11 +31,34 @@
                 <p class="font-mono text-xs uppercase tracking-[0.25em] text-slate-400 dark:text-slate-950/75">Record count</p>
                 <p class="mt-2 text-3xl font-bold">{{ record_count }}</p>
             </div>
-            <form id="table-controls-form" hx-get="{{ request.path }}" hx-target="#app-content" hx-swap="outerHTML" hx-push-url="true" hx-trigger="change from:select, input delay:300ms from:input" class="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_auto_auto_auto_auto] md:items-end">
+            <form id="table-controls-form" hx-get="{{ request.path }}" hx-target="#app-content" hx-swap="outerHTML" hx-push-url="true" hx-trigger="change from:select, input delay:300ms from:input" class="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(12rem,1.2fr)_minmax(11rem,0.9fr)_auto_minmax(12rem,1fr)_auto_auto_auto_auto] xl:items-end">
                 <div>
                     <label for="id_q" class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Search</label>
                     <input id="id_q" name="q" value="{{ search_query }}" type="text" placeholder="Search by keyword" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white px-4 py-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
                 </div>
+                {% if dynamic_filter_enabled %}
+                    <div>
+                        <label for="id_filter_column" class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Column</label>
+                        <select id="id_filter_column" name="filter_column" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white px-4 py-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+                            {% for option in filter_column_options %}
+                                <option value="{{ option.value }}" {% if filter_column == option.value %}selected{% endif %}>{{ option.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="id_filter_operator" class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Op</label>
+                        <select id="id_filter_operator" name="filter_operator" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white px-4 py-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+                            {% for option in filter_operator_options %}
+                                <option value="{{ option.value }}" {% if filter_operator == option.value %}selected{% endif %}>{{ option.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label for="id_filter_value" class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">Value</label>
+                        <input id="id_filter_value" name="filter_value" value="{{ filter_value }}" type="text" list="dynamic-filter-values" placeholder="Leave empty to skip" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white px-4 py-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+                        <datalist id="dynamic-filter-values"></datalist>
+                    </div>
+                {% endif %}
                 <div>
                     <label for="id_view" class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">View</label>
                     <select id="id_view" name="view" class="mt-2 w-full rounded-2xl border border-slate-300/80 bg-white px-4 py-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
@@ -72,6 +95,33 @@
             </form>
         </div>
     </section>
+
+    {% if dynamic_filter_enabled %}
+        {{ filter_value_options|json_script:"filter-value-options-data" }}
+        <script>
+            (() => {
+                const columnSelect = document.getElementById("id_filter_column");
+                const valueList = document.getElementById("dynamic-filter-values");
+                const optionsData = document.getElementById("filter-value-options-data");
+                if (!columnSelect || !valueList || !optionsData) {
+                    return;
+                }
+                const optionsByColumn = JSON.parse(optionsData.textContent || "{}");
+                const refreshValueOptions = () => {
+                    const values = optionsByColumn[columnSelect.value] || [];
+                    valueList.replaceChildren(
+                        ...values.map((value) => {
+                            const option = document.createElement("option");
+                            option.value = value;
+                            return option;
+                        })
+                    );
+                };
+                columnSelect.addEventListener("change", refreshValueOptions);
+                refreshValueOptions();
+            })();
+        </script>
+    {% endif %}
 
     {% if bulk_actions %}
         <section class="mt-6 rounded-[2rem] border border-white/70 bg-white/85 p-5 shadow-sm backdrop-blur dark:border-slate-700/70 dark:bg-slate-900/85">
