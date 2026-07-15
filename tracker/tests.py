@@ -1,6 +1,8 @@
 import json
 from datetime import datetime, time, timedelta
 from io import BytesIO
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
@@ -42,6 +44,7 @@ from .services import (
     get_record,
     get_records,
     infer_fields_from_url_details,
+    import_workbook_for_user,
     matches_any_keyword,
     move_to_applied,
     replace_applied_history_events,
@@ -338,6 +341,61 @@ class DynamicRecordServiceTests(TestCase):
         ordered_history = sorted(history, key=lambda event: (event.occurred_at, event.id))
         self.assertEqual(ordered_history[0].to_stage, "To Apply")
         self.assertEqual(ordered_history[1].to_stage, "Applied")
+
+    def test_import_workbook_uses_stage_date_columns_for_applied_history(self):
+        workbook = Workbook()
+        applied_sheet = workbook.active
+        applied_sheet.title = "Applied"
+        applied_sheet.append(
+            [
+                "Date",
+                "URL",
+                "Name",
+                "Type",
+                "Application Progress",
+                "Screening Date",
+                "Interview Date",
+                "Assignment Date",
+            ]
+        )
+        applied_sheet.append(
+            [
+                "2026-06-24",
+                "https://example.com/assignment",
+                "Assignment Company",
+                "PhD",
+                "Assignment",
+                "2026-06-25",
+                "2026-06-26",
+                "2026-06-27",
+            ]
+        )
+
+        temp_path: Path | None = None
+        try:
+            with NamedTemporaryFile(delete=False, suffix=".xlsx") as temp_file:
+                temp_path = Path(temp_file.name)
+            workbook.save(temp_path)
+
+            import_workbook_for_user(temp_path, self.user, replace=True)
+        finally:
+            if temp_path and temp_path.exists():
+                temp_path.unlink()
+
+        record = get_records(self.applied, self.user)[0]
+        history = list(
+            ApplicationHistoryEvent.objects.filter(
+                user=self.user,
+                table_slug="applied",
+                record_row_key=record.row_key,
+            ).order_by("occurred_at", "id")
+        )
+
+        self.assertEqual(
+            [event.to_stage for event in history],
+            ["Applied", "Screening", "Interview", "Assignment"],
+        )
+        self.assertEqual(history[-1].from_stage, "Interview")
 
     def test_move_to_applied_preserves_deadline_when_applied_tracks_it(self):
         tables = ensure_user_workspace(self.user)
@@ -814,6 +872,33 @@ class DynamicRecordServiceTests(TestCase):
         self.assertEqual(edges[("To Apply (1)", "Applied (1)")], 1)
         self.assertEqual(edges[("Applied (1)", "Withdrawn (1)")], 1)
         self.assertNotIn(("To Apply (1)", "Withdrawn (1)"), edges)
+
+    def test_applied_flow_routes_sparse_assignment_history_through_interview(self):
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-06-24",
+                "role-title": "Assignment Role",
+                "url": "https://example.com/assignment-role",
+                "type": "PhD",
+                "application-progress": "Assignment",
+            },
+        )
+
+        flow_chart = build_applied_flow_chart(get_records(self.applied, self.user), self.user)
+
+        sankey_data = flow_chart["chart_config"]["data"][0]
+        node_labels = sankey_data["node"]["label"]
+        links = sankey_data["link"]
+        edges = {
+            (node_labels[source], node_labels[target]): value
+            for source, target, value in zip(links["source"], links["target"], links["value"])
+        }
+        self.assertEqual(edges[("To Apply (1)", "Applied (1)")], 1)
+        self.assertEqual(edges[("Applied (1)", "Interview (1)")], 1)
+        self.assertEqual(edges[("Interview (1)", "Assignment (1)")], 1)
+        self.assertNotIn(("Applied (1)", "Assignment (1)"), edges)
 
     def test_ai_reliance_chart_forces_values_into_categories(self):
         tables = ensure_user_workspace(self.user)

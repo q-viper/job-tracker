@@ -205,6 +205,50 @@ TABLE_METADATA = {
     },
 }
 
+APPLICATION_STAGE_ORDER = [
+    "To Apply",
+    "Applied",
+    "Screening",
+    "Interview",
+    "Technical Interview",
+    "Assignment",
+    "Offer",
+    "Accepted",
+    "Rejected",
+    "Withdrawn",
+]
+
+TERMINAL_APPLICATION_STAGES = {"Rejected", "Withdrawn", "Accepted", "Offer"}
+
+APPLICATION_STAGE_DATE_COLUMN_SLUGS = {
+    "Screening": "screening-date",
+    "Interview": "interview-date",
+    "Technical Interview": "technical-interview-date",
+    "Assignment": "assignment-date",
+    "Offer": "offer-date",
+    "Accepted": "accepted-date",
+    "Rejected": "rejected-date",
+    "Withdrawn": "withdrawn-date",
+}
+
+APPLICATION_FLOW_REQUIRED_PREDECESSORS = {
+    "Technical Interview": "Interview",
+    "Assignment": "Interview",
+}
+
+APPLICATION_FLOW_NODE_X = {
+    "To Apply": 0.02,
+    "Applied": 0.16,
+    "Screening": 0.32,
+    "Interview": 0.48,
+    "Technical Interview": 0.60,
+    "Assignment": 0.70,
+    "Offer": 0.82,
+    "Accepted": 0.94,
+    "Rejected": 0.94,
+    "Withdrawn": 0.94,
+}
+
 COLUMN_OVERRIDES = {
     "dashboard": {
         "title": {"data_type": DynamicColumn.DataType.TEXT},
@@ -270,6 +314,10 @@ COLUMN_OVERRIDES = {
         },
         "completed-stages": {"data_type": DynamicColumn.DataType.LONG_TEXT},
         "remarks": {"data_type": DynamicColumn.DataType.LONG_TEXT},
+        **{
+            column_slug: {"data_type": DynamicColumn.DataType.DATE}
+            for column_slug in APPLICATION_STAGE_DATE_COLUMN_SLUGS.values()
+        },
     },
     "portals": {
         "url": {"data_type": DynamicColumn.DataType.URL},
@@ -837,21 +885,6 @@ DEFAULT_BOARD_AUTO_ADD_TEMPLATE_KEYS = {
 JOB_TABLE_SLUGS = {"to-apply", "applied"}
 
 DEFAULT_APPLICATION_TAGS = ("Dummy", "PhD", "Job", "Priority")
-
-APPLICATION_STAGE_ORDER = [
-    "To Apply",
-    "Applied",
-    "Screening",
-    "Interview",
-    "Technical Interview",
-    "Assignment",
-    "Offer",
-    "Accepted",
-    "Rejected",
-    "Withdrawn",
-]
-
-TERMINAL_APPLICATION_STAGES = {"Rejected", "Withdrawn", "Accepted", "Offer"}
 
 AI_RELIANCE_CATEGORY_ORDER = ("None", "Low", "Medium", "High", "Unspecified", "Other")
 
@@ -2038,6 +2071,32 @@ def history_datetime_from_date_value(raw_value: Any) -> datetime | None:
     return timezone.make_aware(naive, timezone.get_current_timezone())
 
 
+def normalized_result_stage(value: Any) -> str:
+    normalized = normalize_text(value).lower()
+    if normalized in {"rejected", "withdrawn", "offer", "accepted"}:
+        return normalized.title()
+    return ""
+
+
+def applied_history_dates_from_values(values: dict[str, Any]) -> dict[str, Any]:
+    stage_dates: dict[str, Any] = {}
+    if normalize_text(values.get("date")):
+        stage_dates["Applied"] = values["date"]
+
+    for stage, column_slug in APPLICATION_STAGE_DATE_COLUMN_SLUGS.items():
+        if normalize_text(values.get(column_slug)):
+            stage_dates[stage] = values[column_slug]
+
+    result_stage = normalized_result_stage(values.get("result"))
+    if result_stage and normalize_text(values.get("result-on")):
+        stage_dates.setdefault(result_stage, values["result-on"])
+    return stage_dates
+
+
+def has_explicit_post_applied_history(stage_dates: dict[str, Any]) -> bool:
+    return any(stage != "Applied" for stage in stage_dates)
+
+
 def default_sort_field_for_table(table: DynamicTable) -> str:
     columns = list(table.columns.filter(is_visible=True))
     by_slug = {column.slug: column for column in columns}
@@ -2430,13 +2489,17 @@ def import_workbook_for_user(
                 if not any(row_payload.values()):
                     continue
 
-                save_record(
+                saved_row_key = save_record(
                     table,
                     user,
                     row_payload,
                     row_key=row_key,
                     metadata_map=row_metadata,
                 )
+                if table.slug == "applied":
+                    history_dates = applied_history_dates_from_values(row_payload)
+                    if has_explicit_post_applied_history(history_dates):
+                        replace_applied_history_events(user, saved_row_key, history_dates)
                 imported_rows += 1
 
             imported_counts[table.slug] = imported_rows
@@ -2612,17 +2675,11 @@ def build_export_workbook(
 
 
 def infer_progress_from_values(values: dict[str, Any]) -> str:
-    result = normalize_text(values.get("result"))
+    result_stage = normalized_result_stage(values.get("result"))
     progress = normalize_text(values.get("application-progress"))
     stages = normalize_text(values.get("completed-stages")).lower()
-    if result:
-        normalized = result.lower()
-        if normalized == "rejected":
-            return "Rejected"
-        if normalized == "withdrawn":
-            return "Withdrawn"
-        if normalized in {"offer", "accepted"}:
-            return result.title()
+    if result_stage:
+        return result_stage
     if progress:
         return progress
     if "interview" in stages:
@@ -3568,24 +3625,46 @@ def build_applied_job_type_chart(applied_records: list[GroupedRecord]) -> dict[s
     }
 
 
-def canonical_applied_flow_sequence(stages: list[str]) -> list[str]:
-    observed_stages: set[str] = set()
-    custom_stages: list[str] = []
+def unique_stage_sequence(stages: list[str]) -> list[str]:
+    sequence: list[str] = []
+    seen: set[str] = set()
     for stage in stages:
         normalized_stage = normalize_text(stage)
-        if not normalized_stage:
+        if not normalized_stage or normalized_stage in seen:
             continue
-        observed_stages.add(normalized_stage)
-        if normalized_stage not in APPLICATION_STAGE_ORDER and normalized_stage not in custom_stages:
-            custom_stages.append(normalized_stage)
+        seen.add(normalized_stage)
+        sequence.append(normalized_stage)
+    return sequence
 
-    observed_stages.update({"To Apply", "Applied"})
-    ordered_stages = [
-        stage
-        for stage in APPLICATION_STAGE_ORDER
-        if stage in observed_stages
-    ]
-    return ordered_stages + custom_stages
+
+def insert_required_flow_predecessors(sequence: list[str]) -> list[str]:
+    normalized = list(sequence)
+    changed = True
+    while changed:
+        changed = False
+        for stage, predecessor in APPLICATION_FLOW_REQUIRED_PREDECESSORS.items():
+            if stage not in normalized:
+                continue
+            stage_index = normalized.index(stage)
+            if predecessor in normalized:
+                predecessor_index = normalized.index(predecessor)
+                if predecessor_index < stage_index:
+                    continue
+                normalized.pop(predecessor_index)
+                stage_index = normalized.index(stage)
+            normalized.insert(max(2, stage_index), predecessor)
+            changed = True
+    return normalized
+
+
+def normalize_applied_flow_sequence(stages: list[str]) -> list[str]:
+    observed = unique_stage_sequence(stages)
+    remainder = [stage for stage in observed if stage not in {"To Apply", "Applied"}]
+    sequence = ["To Apply", "Applied"]
+    for stage in remainder:
+        if stage not in sequence:
+            sequence.append(stage)
+    return insert_required_flow_predecessors(sequence)
 
 
 def build_applied_flow_sequences(user, applied_records: list[GroupedRecord]) -> list[list[str]]:
@@ -3621,13 +3700,21 @@ def build_applied_flow_sequences(user, applied_records: list[GroupedRecord]) -> 
             current_stage = infer_progress(record)
             if current_stage and sequence[-1] != current_stage:
                 sequence.append(current_stage)
-        sequence = canonical_applied_flow_sequence(sequence)
+        sequence = normalize_applied_flow_sequence(sequence)
         sequences.append(sequence)
     return sequences
 
 
 def applied_flow_node_label(stage: str, visit_count: int, _current_count: int) -> str:
     return f"{stage} ({visit_count})"
+
+
+def applied_flow_node_x(stage: str) -> float:
+    if stage == "Tracked":
+        return 0.0
+    if stage in APPLICATION_FLOW_NODE_X:
+        return APPLICATION_FLOW_NODE_X[stage]
+    return 0.86
 
 
 def build_applied_flow_chart(
@@ -3678,6 +3765,7 @@ def build_applied_flow_chart(
             "rgba(14, 165, 233, 0.85)",
             *[semantic_hex(stage, alpha=0.82) for stage in sorted(current_stage_counts, key=application_stage_sort_key)],
         ]
+        node_x = [applied_flow_node_x(stage) for stage in node_keys]
     else:
         ordered_stages = sorted(
             set(stage_counts) | set(current_stage_counts),
@@ -3705,6 +3793,7 @@ def build_applied_flow_chart(
             value.append(count)
             link_colors.append(semantic_hex(target_stage, alpha=0.24))
         node_colors = [semantic_hex(stage, alpha=0.82) for stage in ordered_stages]
+        node_x = [applied_flow_node_x(stage) for stage in node_keys]
 
     return {
         "title": "Applied Flow",
@@ -3723,6 +3812,7 @@ def build_applied_flow_chart(
                         "line": {"color": "rgba(15, 23, 42, 0.18)", "width": 1},
                         "label": node_labels,
                         "color": node_colors,
+                        "x": node_x,
                     },
                     "link": {
                         "source": source,
