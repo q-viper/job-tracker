@@ -232,8 +232,11 @@ APPLICATION_STAGE_DATE_COLUMN_SLUGS = {
 }
 
 APPLICATION_FLOW_REQUIRED_PREDECESSORS = {
+    "Interview": "Screening",
     "Technical Interview": "Interview",
     "Assignment": "Interview",
+    "Offer": "Interview",
+    "Accepted": "Offer",
 }
 
 APPLICATION_FLOW_NODE_X = {
@@ -1845,17 +1848,21 @@ def build_specs(excel_path: str | Path | None = None) -> dict[str, dict[str, Any
 def ensure_user_workspace(user, excel_path: str | Path | None = None) -> dict[str, DynamicTable]:
     specs = build_specs(excel_path)
     tables: dict[str, DynamicTable] = {}
+    existing_tables = {
+        table.slug: table
+        for table in DynamicTable.objects.filter(owner=user, slug__in=specs.keys()).prefetch_related("columns")
+    }
     for table_slug, spec in specs.items():
-        table, _ = DynamicTable.objects.get_or_create(
-            owner=user,
-            slug=table_slug,
-            defaults={
-                "name": spec["name"],
-                "description": spec["description"],
-                "display_order": spec["display_order"],
-                "show_in_navigation": spec["show_in_navigation"],
-            },
-        )
+        table = existing_tables.get(table_slug)
+        if table is None:
+            table = DynamicTable.objects.create(
+                owner=user,
+                slug=table_slug,
+                name=spec["name"],
+                description=spec["description"],
+                display_order=spec["display_order"],
+                show_in_navigation=spec["show_in_navigation"],
+            )
         changed_fields: list[str] = []
         for field_name in ("name", "description", "display_order", "show_in_navigation"):
             new_value = spec[field_name]
@@ -1865,21 +1872,26 @@ def ensure_user_workspace(user, excel_path: str | Path | None = None) -> dict[st
         if changed_fields:
             table.save(update_fields=changed_fields + ["updated_at"])
 
+        existing_columns = {column.slug: column for column in table.columns.all()}
+        columns_changed = False
         for column_spec in spec["columns"]:
-            column, _ = DynamicColumn.objects.get_or_create(
-                table=table,
-                slug=column_spec["slug"],
-                defaults={
-                    "name": column_spec["name"],
-                    "data_type": column_spec["data_type"],
-                    "position": column_spec["position"],
-                    "is_required": column_spec["is_required"],
-                    "is_visible": column_spec["is_visible"],
-                    "placeholder": column_spec["placeholder"],
-                    "help_text": column_spec["help_text"],
-                    "choices_text": column_spec["choices_text"],
-                },
-            )
+            column = existing_columns.get(column_spec["slug"])
+            if column is None:
+                column = DynamicColumn.objects.create(
+                    table=table,
+                    slug=column_spec["slug"],
+                    name=column_spec["name"],
+                    data_type=column_spec["data_type"],
+                    position=column_spec["position"],
+                    is_required=column_spec["is_required"],
+                    is_visible=column_spec["is_visible"],
+                    placeholder=column_spec["placeholder"],
+                    help_text=column_spec["help_text"],
+                    choices_text=column_spec["choices_text"],
+                )
+                existing_columns[column.slug] = column
+                columns_changed = True
+                continue
             column_changes: list[str] = []
             for field_name in (
                 "name",
@@ -1897,10 +1909,14 @@ def ensure_user_workspace(user, excel_path: str | Path | None = None) -> dict[st
                     column_changes.append(field_name)
             if column_changes:
                 column.save(update_fields=column_changes + ["updated_at"])
+                columns_changed = True
 
-        deprecated_columns = DynamicColumn.objects.filter(table=table, slug__in=DEPRECATED_COLUMN_SLUGS)
-        if deprecated_columns.exists():
-            deprecated_columns.delete()
+        deprecated_slugs = set(existing_columns) & DEPRECATED_COLUMN_SLUGS
+        deleted_count = 0
+        if deprecated_slugs:
+            deleted_count, _ = DynamicColumn.objects.filter(table=table, slug__in=deprecated_slugs).delete()
+        if columns_changed or deleted_count:
+            getattr(table, "_prefetched_objects_cache", {}).pop("columns", None)
 
         tables[table_slug] = table
     ensure_default_application_tags(user)
@@ -1924,12 +1940,18 @@ def build_label(values: dict[str, str]) -> str:
 
 
 def ensure_default_application_tags(user) -> None:
-    for tag_name in DEFAULT_APPLICATION_TAGS:
-        ApplicationTag.objects.get_or_create(
-            user=user,
-            slug=normalize_slug(tag_name),
-            defaults={"name": tag_name},
-        )
+    default_tags = {normalize_slug(tag_name): tag_name for tag_name in DEFAULT_APPLICATION_TAGS}
+    existing_slugs = set(
+        ApplicationTag.objects.filter(user=user, slug__in=default_tags).values_list("slug", flat=True)
+    )
+    ApplicationTag.objects.bulk_create(
+        [
+            ApplicationTag(user=user, slug=slug, name=name)
+            for slug, name in default_tags.items()
+            if slug not in existing_slugs
+        ],
+        ignore_conflicts=True,
+    )
 
 
 def parse_tag_names(raw_value: str | None) -> list[str]:
@@ -2098,7 +2120,7 @@ def has_explicit_post_applied_history(stage_dates: dict[str, Any]) -> bool:
 
 
 def default_sort_field_for_table(table: DynamicTable) -> str:
-    columns = list(table.columns.filter(is_visible=True))
+    columns = visible_table_columns(table)
     by_slug = {column.slug: column for column in columns}
     if table.slug == "to-apply":
         deadline_column = by_slug.get("deadline")
@@ -2114,12 +2136,23 @@ def default_sort_field_for_table(table: DynamicTable) -> str:
     return first_date_column or "updated_at"
 
 
+def ordered_table_columns(table: DynamicTable, *, visible_only: bool = False) -> list[DynamicColumn]:
+    columns = list(table.columns.all())
+    if visible_only:
+        columns = [column for column in columns if column.is_visible]
+    return sorted(columns, key=lambda column: (column.position, column.id or 0))
+
+
+def visible_table_columns(table: DynamicTable) -> list[DynamicColumn]:
+    return ordered_table_columns(table, visible_only=True)
+
+
 def default_sort_direction_for_field(table: DynamicTable, sort_field: str) -> str:
     if sort_field == "deadline":
         return "asc"
     if sort_field in {"created_at", "updated_at"}:
         return "desc"
-    column = table.columns.filter(is_visible=True, slug=sort_field).first()
+    column = next((column for column in visible_table_columns(table) if column.slug == sort_field), None)
     if column and column.data_type == DynamicColumn.DataType.DATE:
         return "desc"
     return "desc"
@@ -2171,7 +2204,7 @@ def sort_records_with_field(
 ) -> list[GroupedRecord]:
     column_lookup = {
         column.slug: column
-        for column in table.columns.filter(is_visible=True)
+        for column in visible_table_columns(table)
     }
     sortable_records: list[tuple[tuple[int, int, Any], GroupedRecord]] = []
     missing_records: list[GroupedRecord] = []
@@ -2215,7 +2248,7 @@ def get_records(table: DynamicTable, user) -> list[GroupedRecord]:
         .select_related("column")
         .order_by("row_key", "column__position")
     )
-    columns = list(table.columns.filter(is_visible=True))
+    columns = visible_table_columns(table)
     grouped_values: dict[UUID, dict[str, str]] = defaultdict(dict)
     grouped_metadata: dict[UUID, dict[str, dict[str, Any]]] = defaultdict(dict)
     grouped_times: dict[UUID, dict[str, datetime | None]] = defaultdict(
@@ -2749,6 +2782,45 @@ def record_application_history_event(
     )
 
 
+def record_application_stage_path(
+    user,
+    table_slug: str,
+    row_key: UUID | str,
+    from_stage: str,
+    to_stage: str,
+    *,
+    occurred_at: datetime | None = None,
+    after: datetime | None = None,
+) -> list[ApplicationHistoryEvent]:
+    stage_path = application_stage_path_between(from_stage, to_stage)
+    if not stage_path:
+        return []
+
+    final_time = occurred_at or timezone.now()
+    first_time = final_time - timedelta(minutes=max(len(stage_path) - 1, 0))
+    if after and first_time <= after:
+        first_time = after + timedelta(minutes=1)
+
+    previous_stage = normalize_text(from_stage) or "Applied"
+    events: list[ApplicationHistoryEvent] = []
+    for index, stage in enumerate(stage_path):
+        event_time = first_time + timedelta(minutes=index)
+        events.append(
+            record_application_history_event(
+                user,
+                table_slug,
+                row_key,
+                ApplicationHistoryEvent.EventType.STAGE_CHANGE,
+                from_stage=previous_stage,
+                to_stage=stage,
+                occurred_at=event_time,
+                notes=f"Progress updated to {stage}.",
+            )
+        )
+        previous_stage = stage
+    return events
+
+
 def ensure_to_apply_history_precedes_applied(user, row_key: UUID | str) -> None:
     row_uuid = UUID(str(row_key))
     first_applied_at = (
@@ -2833,14 +2905,13 @@ def sync_job_history_for_saved_record(
         ensure_to_apply_history_precedes_applied(user, row_key)
         current_stage = infer_progress_from_values(prepared_values)
         if current_stage != "Applied":
-            record_application_history_event(
+            record_application_stage_path(
                 user,
                 table.slug,
                 row_key,
-                ApplicationHistoryEvent.EventType.STAGE_CHANGE,
                 from_stage="Applied",
                 to_stage=current_stage,
-                notes=f"Progress updated to {current_stage}.",
+                after=applied_at,
             )
         return
 
@@ -2850,14 +2921,23 @@ def sync_job_history_for_saved_record(
     previous_stage = infer_progress(existing_record)
     current_stage = infer_progress_from_values(prepared_values)
     if current_stage != previous_stage:
-        record_application_history_event(
+        last_history_time = (
+            ApplicationHistoryEvent.objects.filter(
+                user=user,
+                table_slug=table.slug,
+                record_row_key=UUID(str(row_key)),
+            )
+            .order_by("-occurred_at", "-id")
+            .values_list("occurred_at", flat=True)
+            .first()
+        )
+        record_application_stage_path(
             user,
             table.slug,
             row_key,
-            ApplicationHistoryEvent.EventType.STAGE_CHANGE,
             from_stage=previous_stage,
             to_stage=current_stage,
-            notes=f"Progress changed from {previous_stage} to {current_stage}.",
+            after=last_history_time,
         )
         ensure_to_apply_history_precedes_applied(user, row_key)
 
@@ -2911,6 +2991,7 @@ def replace_applied_history_events(user, row_key: UUID | str, stage_dates: dict[
 
     previous_stage = "Applied"
     previous_time = applied_at
+    recorded_stages = {"Applied"}
     record_application_history_event(
         user,
         "applied",
@@ -2922,22 +3003,32 @@ def replace_applied_history_events(user, row_key: UUID | str, stage_dates: dict[
     )
 
     for stage, occurred_at in ordered_items:
-        if stage == "Applied":
+        if stage == "Applied" or stage in recorded_stages:
             continue
-        if occurred_at <= previous_time:
-            occurred_at = previous_time + timedelta(minutes=1)
-        record_application_history_event(
-            user,
-            "applied",
-            row_uuid,
-            ApplicationHistoryEvent.EventType.STAGE_CHANGE,
-            from_stage=previous_stage,
-            to_stage=stage,
-            occurred_at=occurred_at,
-            notes=f"Progress updated to {stage}.",
-        )
-        previous_stage = stage
-        previous_time = occurred_at
+        stage_path = [
+            path_stage
+            for path_stage in application_stage_path_between(previous_stage, stage)
+            if path_stage not in recorded_stages
+        ]
+        if not stage_path:
+            continue
+        for path_stage in stage_path:
+            event_time = occurred_at if path_stage == stage else previous_time + timedelta(minutes=1)
+            if event_time <= previous_time:
+                event_time = previous_time + timedelta(minutes=1)
+            record_application_history_event(
+                user,
+                "applied",
+                row_uuid,
+                ApplicationHistoryEvent.EventType.STAGE_CHANGE,
+                from_stage=previous_stage,
+                to_stage=path_stage,
+                occurred_at=event_time,
+                notes=f"Progress updated to {path_stage}.",
+            )
+            recorded_stages.add(path_stage)
+            previous_stage = path_stage
+            previous_time = event_time
     ensure_to_apply_history_precedes_applied(user, row_uuid)
 
 
@@ -3665,6 +3756,23 @@ def normalize_applied_flow_sequence(stages: list[str]) -> list[str]:
         if stage not in sequence:
             sequence.append(stage)
     return insert_required_flow_predecessors(sequence)
+
+
+def application_stage_path_between(from_stage: str, to_stage: str) -> list[str]:
+    source_stage = normalize_text(from_stage) or "Applied"
+    target_stage = normalize_text(to_stage)
+    if not target_stage or target_stage == source_stage:
+        return []
+
+    sequence = normalize_applied_flow_sequence([source_stage, target_stage])
+    try:
+        source_index = sequence.index(source_stage)
+        target_index = sequence.index(target_stage)
+    except ValueError:
+        return [target_stage]
+    if target_index <= source_index:
+        return [target_stage]
+    return sequence[source_index + 1 : target_index + 1]
 
 
 def build_applied_flow_sequences(user, applied_records: list[GroupedRecord]) -> list[list[str]]:

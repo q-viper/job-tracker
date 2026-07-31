@@ -397,6 +397,47 @@ class DynamicRecordServiceTests(TestCase):
         )
         self.assertEqual(history[-1].from_stage, "Interview")
 
+    def test_import_workbook_routes_sparse_assignment_progress_through_prior_stages(self):
+        workbook = Workbook()
+        applied_sheet = workbook.active
+        applied_sheet.title = "Applied"
+        applied_sheet.append(["Date", "URL", "Name", "Type", "Application Progress"])
+        applied_sheet.append(
+            [
+                "2026-06-24",
+                "https://example.com/sparse-assignment",
+                "Sparse Assignment Company",
+                "PhD",
+                "Assignment",
+            ]
+        )
+
+        temp_path: Path | None = None
+        try:
+            with NamedTemporaryFile(delete=False, suffix=".xlsx") as temp_file:
+                temp_path = Path(temp_file.name)
+            workbook.save(temp_path)
+
+            import_workbook_for_user(temp_path, self.user, replace=True)
+        finally:
+            if temp_path and temp_path.exists():
+                temp_path.unlink()
+
+        record = get_records(self.applied, self.user)[0]
+        history = list(
+            ApplicationHistoryEvent.objects.filter(
+                user=self.user,
+                table_slug="applied",
+                record_row_key=record.row_key,
+            ).order_by("occurred_at", "id")
+        )
+
+        self.assertEqual(
+            [event.to_stage for event in history],
+            ["Applied", "Screening", "Interview", "Assignment"],
+        )
+        self.assertEqual(history[-1].from_stage, "Interview")
+
     def test_move_to_applied_preserves_deadline_when_applied_tracks_it(self):
         tables = ensure_user_workspace(self.user)
         source_row_key = save_record(
@@ -514,8 +555,8 @@ class DynamicRecordServiceTests(TestCase):
                 record_row_key=row_key,
             ).order_by("occurred_at", "id")
         )
-        self.assertEqual(len(history), 2)
-        self.assertEqual(history[-1].from_stage, "Applied")
+        self.assertEqual([event.to_stage for event in history], ["Applied", "Screening", "Interview"])
+        self.assertEqual(history[-1].from_stage, "Screening")
         self.assertEqual(history[-1].to_stage, "Interview")
 
     def test_application_progress_aggregation_uses_inferred_result_status(self):
@@ -896,8 +937,10 @@ class DynamicRecordServiceTests(TestCase):
             for source, target, value in zip(links["source"], links["target"], links["value"])
         }
         self.assertEqual(edges[("To Apply (1)", "Applied (1)")], 1)
-        self.assertEqual(edges[("Applied (1)", "Interview (1)")], 1)
+        self.assertEqual(edges[("Applied (1)", "Screening (1)")], 1)
+        self.assertEqual(edges[("Screening (1)", "Interview (1)")], 1)
         self.assertEqual(edges[("Interview (1)", "Assignment (1)")], 1)
+        self.assertNotIn(("Applied (1)", "Interview (1)"), edges)
         self.assertNotIn(("Applied (1)", "Assignment (1)"), edges)
 
     def test_ai_reliance_chart_forces_values_into_categories(self):
@@ -1323,6 +1366,66 @@ class DynamicRecordServiceTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Rejected Applied Role")
         self.assertNotContains(response, "Plain Applied Role")
+
+    def test_applied_list_paginates_large_result_sets(self):
+        for index in range(55):
+            save_record(
+                self.applied,
+                self.user,
+                {
+                    "date": f"2026-05-{(index % 28) + 1:02d}",
+                    "role-title": f"Paged Role {index:02d}",
+                    "type": "Job",
+                    "application-progress": "Applied",
+                },
+            )
+        self.client.force_login(self.user)
+
+        first_page = self.client.get(reverse("applied_list"))
+
+        self.assertEqual(first_page.status_code, 200)
+        self.assertEqual(first_page.context["record_count"], 55)
+        self.assertEqual(first_page.context["page_record_count"], 25)
+        self.assertEqual(len(first_page.context["table_rows"]), 25)
+        self.assertTrue(first_page.context["pagination"]["has_next"])
+
+        second_page = self.client.get(reverse("applied_list"), {"page": "2"})
+
+        self.assertEqual(second_page.status_code, 200)
+        self.assertEqual(second_page.context["record_count"], 55)
+        self.assertEqual(second_page.context["page_record_count"], 25)
+        self.assertEqual(len(second_page.context["table_rows"]), 25)
+        self.assertTrue(second_page.context["pagination"]["has_previous"])
+        self.assertTrue(second_page.context["pagination"]["has_next"])
+
+        last_page = self.client.get(reverse("applied_list"), {"page": "3"})
+
+        self.assertEqual(last_page.status_code, 200)
+        self.assertEqual(last_page.context["page_record_count"], 5)
+        self.assertEqual(len(last_page.context["table_rows"]), 5)
+        self.assertTrue(last_page.context["pagination"]["has_previous"])
+        self.assertFalse(last_page.context["pagination"]["has_next"])
+
+    def test_table_filter_trigger_does_not_listen_to_bulk_checkboxes(self):
+        save_record(
+            self.applied,
+            self.user,
+            {
+                "date": "2026-05-01",
+                "role-title": "Checkbox Role",
+                "type": "Job",
+                "application-progress": "Applied",
+            },
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse("applied_list"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "from:.table-control-text")
+        self.assertContains(response, "from:.table-control-select")
+        self.assertNotContains(response, "from:input")
+        self.assertContains(response, "bulk-record-checkbox")
 
     def test_to_apply_dynamic_filter_defaults_to_virtual_application_progress(self):
         save_record(

@@ -85,6 +85,7 @@ from .services import (
     save_record,
     sync_application_tags,
     sort_records_with_field,
+    visible_table_columns,
 )
 from .notifications import build_email_body, send_notification_to_user, upcoming_deadlines_for_user
 from .serializers import serialize_dashboard_widget
@@ -94,9 +95,28 @@ logger = logging.getLogger(__name__)
 
 
 class WorkspaceReadyMixin:
+    workspace_session_key = "job_tracker_workspace_ready_signature"
+
+    def workspace_signature(self, user) -> str:
+        workbook = Path(settings.BASE_DIR) / "Applications.xlsx"
+        if workbook.exists():
+            try:
+                stat = workbook.stat()
+                return f"{user.pk}:{stat.st_mtime_ns}:{stat.st_size}"
+            except OSError:
+                pass
+        return f"{user.pk}:no-workbook"
+
     def dispatch(self, request, *args, **kwargs):
         workbook = Path(settings.BASE_DIR) / "Applications.xlsx"
-        ensure_user_workspace(request.user, workbook if workbook.exists() else None)
+        signature = self.workspace_signature(request.user)
+        workspace_already_ready = (
+            request.session.get(self.workspace_session_key) == signature
+            and DynamicTable.objects.filter(owner=request.user).exists()
+        )
+        if not workspace_already_ready:
+            ensure_user_workspace(request.user, workbook if workbook.exists() else None)
+            request.session[self.workspace_session_key] = signature
         return super().dispatch(request, *args, **kwargs)
 
 
@@ -458,6 +478,8 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
     page_title = ""
     page_description = ""
     nav_section = ""
+    default_page_size = 25
+    page_size_options = [25, 50, 100]
     filterable_table_slugs = {"to-apply", "applied"}
     categorical_filter_slugs = {
         "ai-reliance",
@@ -476,7 +498,17 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
     ]
 
     def get_table(self) -> DynamicTable:
-        return get_user_table(self.request.user, self.table_slug)
+        if not hasattr(self, "_table"):
+            self._table = get_user_table(self.request.user, self.table_slug)
+        return self._table
+
+    def get_visible_columns(self, table: DynamicTable) -> list[DynamicColumn]:
+        if not hasattr(self, "_visible_columns_by_table"):
+            self._visible_columns_by_table = {}
+        cache_key = table.pk
+        if cache_key not in self._visible_columns_by_table:
+            self._visible_columns_by_table[cache_key] = visible_table_columns(table)
+        return self._visible_columns_by_table[cache_key]
 
     def get_detail_url(self, table: DynamicTable, record) -> str:
         if table.slug == "to-apply":
@@ -516,7 +548,7 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
     def get_filter_columns(self, table: DynamicTable) -> list[DynamicColumn]:
         if not self.dynamic_filter_enabled(table):
             return []
-        columns = list(table.columns.filter(is_visible=True).order_by("position", "id"))
+        columns = list(self.get_visible_columns(table))
         if table.slug == "to-apply" and not any(column.slug == "application-progress" for column in columns):
             columns.insert(
                 0,
@@ -772,6 +804,52 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
     def get_view_mode(self) -> str:
         return self.request.GET.get("view", "cards") if self.request.GET.get("view") in {"cards", "table"} else "cards"
 
+    def get_page_size(self) -> int:
+        try:
+            requested = int(self.request.GET.get("per_page") or self.default_page_size)
+        except (TypeError, ValueError):
+            requested = self.default_page_size
+        return requested if requested in self.page_size_options else self.default_page_size
+
+    def get_page_number(self, page_count: int) -> int:
+        try:
+            requested = int(self.request.GET.get("page") or 1)
+        except (TypeError, ValueError):
+            requested = 1
+        return min(max(requested, 1), max(page_count, 1))
+
+    def build_page_url(self, page_number: int) -> str:
+        query = self.request.GET.copy()
+        query["page"] = str(page_number)
+        query["per_page"] = str(self.get_page_size())
+        return f"{self.request.path}?{query.urlencode()}"
+
+    def paginate_records_for_display(self, records):
+        total_count = len(records)
+        page_size = self.get_page_size()
+        page_count = max((total_count + page_size - 1) // page_size, 1)
+        page_number = self.get_page_number(page_count)
+        start = (page_number - 1) * page_size
+        end = start + page_size
+        page_records = records[start:end]
+        start_index = start + 1 if page_records else 0
+        end_index = start + len(page_records)
+        pagination = {
+            "total_count": total_count,
+            "page_record_count": len(page_records),
+            "page_number": page_number,
+            "page_count": page_count,
+            "page_size": page_size,
+            "page_size_options": self.page_size_options,
+            "start_index": start_index,
+            "end_index": end_index,
+            "has_previous": page_number > 1,
+            "has_next": page_number < page_count,
+            "previous_url": self.build_page_url(page_number - 1) if page_number > 1 else "",
+            "next_url": self.build_page_url(page_number + 1) if page_number < page_count else "",
+        }
+        return page_records, pagination
+
     def get_sort_direction(self, table: DynamicTable) -> str:
         requested = self.request.GET.get("dir")
         if requested in {"asc", "desc"}:
@@ -779,7 +857,7 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
         return default_sort_direction_for_field(table, self.get_sort_field(table))
 
     def get_sort_field(self, table: DynamicTable) -> str:
-        allowed = {"label", "created_at", "updated_at", *table.columns.filter(is_visible=True).values_list("slug", flat=True)}
+        allowed = {"label", "created_at", "updated_at", *[column.slug for column in self.get_visible_columns(table)]}
         if table.slug in {"to-apply", "applied"}:
             allowed.add("tags")
         requested = self.request.GET.get("sort")
@@ -795,7 +873,7 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
         ]
         if table.slug in {"to-apply", "applied"}:
             options.append({"value": "tags", "label": "Tags"})
-        for column in table.columns.filter(is_visible=True):
+        for column in self.get_visible_columns(table):
             options.append({"value": column.slug, "label": column.name})
         return options
 
@@ -861,13 +939,16 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
         table = self.get_table()
         all_records = get_records(table, self.request.user)
         records = self.sort_records_for_display(all_records, table)
+        page_records, pagination = self.paginate_records_for_display(records)
         filter_value_options = self.get_filter_value_options(table, all_records)
         context.update(
             {
                 "table": table,
-                "columns": table.columns.filter(is_visible=True),
-                "table_rows": self.build_rows(table, records),
+                "columns": self.get_visible_columns(table),
+                "table_rows": self.build_rows(table, page_records),
                 "record_count": len(records),
+                "page_record_count": len(page_records),
+                "pagination": pagination,
                 "page_title": self.page_title or table.name,
                 "page_description": self.page_description or table.description,
                 "create_url": self.get_create_url(table),
@@ -875,6 +956,8 @@ class BaseTableListView(LoginRequiredMixin, WorkspaceReadyMixin, TemplateView):
                 "view_mode": self.get_view_mode(),
                 "sort_field": self.get_sort_field(table),
                 "sort_direction": self.get_sort_direction(table),
+                "page_size": self.get_page_size(),
+                "page_size_options": self.page_size_options,
                 "sort_options": self.get_sort_options(table),
                 "tag_filter": self.get_tag_filter(table),
                 "search_query": (self.request.GET.get("q") or "").strip(),

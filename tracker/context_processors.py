@@ -13,12 +13,22 @@ def navigation_tables(request):
             "smtp_configured": False,
         }
     try:
-        tables = DynamicTable.objects.filter(
+        tables = list(DynamicTable.objects.filter(
             owner=request.user,
             show_in_navigation=True,
-        ).order_by("display_order", "name")
+        ).order_by("display_order", "name"))
     except (OperationalError, ProgrammingError):
         tables = []
+
+    if "HTTP_HX_REQUEST" in request.META:
+        return {
+            "navigation_tables": tables,
+            "rag_default_prompts": [],
+            "quassi_history": [],
+            "quassi_models": [],
+            "smtp_configured": False,
+        }
+
     try:
         from .rag import RAG_DEFAULT_PROMPTS
     except Exception:
