@@ -1,6 +1,6 @@
 # Job Tracker
 
-Python fullstack job-search tracker built with Django, SQLite, DRF, Tailwind-styled templates, and a flexible per-user table system. And of course another vibecoded AI slop!
+Python full-stack job-search tracker built with Django, SQLite, Django REST Framework, Tailwind-styled templates, and a flexible per-user table system.
 
 ## What it includes
 
@@ -14,6 +14,64 @@ Python fullstack job-search tracker built with Django, SQLite, DRF, Tailwind-sty
 - Floating RAG chat assistant with quick prompts and a CPU-friendly local model path
 - Standalone SMTP notification script with optional portal auto-fetch
 - Local `.env` setup with seeded `admin` and `testuser` accounts
+
+## Demo walkthrough
+
+These scrolling captures show the tracker with real account data.
+
+<details>
+<summary>Home — Home Lens</summary>
+
+![Home Lens demo](assets/demo/01_home_home_lens.gif)
+</details>
+
+<details>
+<summary>Dashboard library</summary>
+
+![Dashboard library demo](assets/demo/02_dashboard_library.gif)
+</details>
+
+<details>
+<summary>Pipeline Lab</summary>
+
+![Pipeline Lab demo](assets/demo/03_pipeline_lab.gif)
+</details>
+
+<details>
+<summary>Deadline Radar</summary>
+
+![Deadline Radar demo](assets/demo/04_deadline_radar.gif)
+</details>
+
+<details>
+<summary>To Apply</summary>
+
+![To Apply demo](assets/demo/05_to_apply.gif)
+</details>
+
+<details>
+<summary>Applied</summary>
+
+![Applied demo](assets/demo/06_applied.gif)
+</details>
+
+<details>
+<summary>Portals</summary>
+
+![Portals demo](assets/demo/07_portals.gif)
+</details>
+
+<details>
+<summary>Settings</summary>
+
+![Settings demo](assets/demo/08_settings.gif)
+</details>
+
+<details>
+<summary>Schema Panel</summary>
+
+![Schema Panel demo](assets/demo/09_schema_panel.gif)
+</details>
 
 ## Setup
 
