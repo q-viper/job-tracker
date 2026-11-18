@@ -15,6 +15,13 @@ Python full-stack job-search tracker built with Django, SQLite, Django REST Fram
 - Standalone SMTP notification script with optional portal auto-fetch
 - Local `.env` setup with seeded `admin` and `testuser` accounts
 
+## App workflow
+
+1. **Find opportunities:** Save job-board or career-portal URLs, fetch listings, and review the results. The chat assistant can search your tracked data, help match an uploaded CV, and send selected jobs to `To Apply`.
+2. **Shortlist:** Keep promising roles in `To Apply`; update details, deadlines, and notes, then promote the roles you apply for.
+3. **Track applications:** In `Applied`, record progress stages, dates, and outcomes, and keep related CV and cover-letter text with each role.
+4. **Review progress:** Use the dashboard to see deadlines and pipeline trends. Customize dashboard boards or workspace tables as your process changes, and enable email notifications if useful.
+
 ## Demo walkthrough
 
 These scrolling captures show the tracker with real account data.
